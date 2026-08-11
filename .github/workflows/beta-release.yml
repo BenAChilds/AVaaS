@@ -1,0 +1,64 @@
+name: Beta release
+on:
+  push:
+    tags: ['v*b']
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+jobs:
+  verify_branch:
+    runs-on: ubuntu-latest
+    outputs:
+      matches: ${{ steps.branch.outputs.matches }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Check tag is on dev
+        id: branch
+        run: |
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/dev; then
+            echo "matches=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Skipping beta release because the tagged commit is not on dev"
+            echo "matches=false" >> "$GITHUB_OUTPUT"
+          fi
+  release:
+    needs: verify_branch
+    if: needs.verify_branch.outputs.matches == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - name: Build release archives
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags="-s -w -X main.version=$VERSION -X main.commit=${GITHUB_SHA} -X main.buildDate=$(date -u +%FT%TZ)" -o avaas ./cmd/avaas
+            tar -czf "dist/avaas_${VERSION}_linux_${arch}.tar.gz" avaas README.md LICENSE CHANGELOG.md configs systemd scripts
+          done
+          cd dist && sha256sum * > checksums.txt
+      - uses: anchore/sbom-action@v0
+        with:
+          path: ./dist
+          output-file: ./dist/sbom.spdx.json
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/*'
+      - uses: softprops/action-gh-release@v2
+        with: {files: 'dist/*', generate_release_notes: true, prerelease: true}
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          provenance: true
+          sbom: true
