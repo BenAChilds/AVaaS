@@ -17,8 +17,8 @@ jobs:
       - run: go vet ./...
       - uses: dominikh/staticcheck-action@v1
         with: {version: latest, install-go: false}
-      - uses: golangci/golangci-lint-action@v7
-        with: {version: v2.4.0}
+      - uses: golangci/golangci-lint-action@v9
+        with: {version: v2.11.4}
       - run: go test -race -coverprofile=coverage.out ./...
       - name: Vulnerability scan
         uses: golang/govulncheck-action@v1
