@@ -1,0 +1,105 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+
+	"github.com/benachilds/avaas/internal/auth"
+	"github.com/benachilds/avaas/internal/config"
+	"github.com/benachilds/avaas/internal/store"
+)
+
+func testServer(t *testing.T) (http.Handler, *store.Store, []byte, string) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DatabasePath = filepath.Join(dir, "avaas.db")
+	cfg.LogDir = filepath.Join(dir, "logs")
+	cfg.SpoolDir = filepath.Join(dir, "spool")
+	cfg.PublicBaseURL = "https://scan.example"
+	s, err := store.Open(cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	pepper := []byte("a sufficiently long API pepper for tests")
+	cipher, err := auth.NewURLCipher([]byte("a sufficiently long encryption key for tests"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, token, err := store.GenerateKey(context.Background(), s, pepper, "test", []string{"scan", "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(cfg, s, pepper, cipher, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))).Handler(), s, pepper, token
+}
+func request(t *testing.T, h http.Handler, method, path, token string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(method, path, bytes.NewReader(body))
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		r.Header.Set("Content-Type", "application/json")
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+func TestSubmitPollQueueAndRevoke(t *testing.T) {
+	h, s, _, token := testServer(t)
+	unauthorized := request(t, h, http.MethodPost, "/v1/scans", "", []byte(`{"url":"https://example.org/file"}`))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status %d", unauthorized.Code)
+	}
+	created := request(t, h, http.MethodPost, "/v1/scans", token, []byte(`{"url":"https://example.org/file"}`))
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create status %d: %s", created.Code, created.Body.String())
+	}
+	var submission map[string]string
+	if err := json.Unmarshal(created.Body.Bytes(), &submission); err != nil {
+		t.Fatal(err)
+	}
+	if submission["status_url"] != "https://scan.example/v1/scans/"+submission["id"] {
+		t.Fatalf("bad status URL: %#v", submission)
+	}
+	polled := request(t, h, http.MethodGet, "/v1/scans/"+submission["id"], token, nil)
+	if polled.Code != http.StatusOK || bytes.Contains(polled.Body.Bytes(), []byte("example.org")) {
+		t.Fatalf("poll leaked URL or failed: %d %s", polled.Code, polled.Body.String())
+	}
+	queue := request(t, h, http.MethodGet, "/v1/queue", token, nil)
+	if queue.Code != http.StatusOK || !bytes.Contains(queue.Body.Bytes(), []byte(`"queued":1`)) {
+		t.Fatalf("queue: %d %s", queue.Code, queue.Body.String())
+	}
+	keys, err := store.ListKeys(context.Background(), s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.RevokeKey(context.Background(), s, keys[0].ID, "test", true); err != nil {
+		t.Fatal(err)
+	}
+	revoked := request(t, h, http.MethodGet, "/v1/queue", token, nil)
+	if revoked.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked status %d", revoked.Code)
+	}
+}
+
+func TestRejectsUnsafeInputBeforeQueue(t *testing.T) {
+	h, _, _, token := testServer(t)
+	for _, body := range []string{`{"url":"file:///etc/passwd"}`, `{"url":"https://user:pass@example.org/file"}`, `{"url":"https://example.org","extra":true}`} {
+		w := request(t, h, http.MethodPost, "/v1/scans", token, []byte(body))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("body %s returned %d", body, w.Code)
+		}
+	}
+}

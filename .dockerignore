@@ -1,0 +1,8 @@
+.git
+.github
+*.db
+*.log
+bin
+dist
+coverage.out
+

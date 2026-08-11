@@ -1,0 +1,21 @@
+[Unit]
+Description=AVaaS ClamAV definition updater
+After=network-online.target
+Wants=network-online.target
+PartOf=avaas.target
+
+[Service]
+Type=simple
+User=avaas
+Group=avaas
+ExecStart=/usr/bin/env freshclam --daemon --foreground --config-file=/etc/avaas/freshclam.conf
+Restart=on-failure
+RestartSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/avaas/clamav /var/log/avaas /run/avaas
+
+[Install]
+WantedBy=avaas.target

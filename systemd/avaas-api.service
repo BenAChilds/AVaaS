@@ -1,0 +1,32 @@
+[Unit]
+Description=AVaaS API
+After=network-online.target avaas-clamd.service
+Wants=network-online.target
+Requires=avaas-clamd.service
+PartOf=avaas.target
+
+[Service]
+Type=simple
+User=avaas
+Group=avaas
+EnvironmentFile=/etc/avaas/avaas.env
+ExecStart=/usr/local/bin/avaas serve
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/avaas /var/log/avaas /run/avaas
+
+[Install]
+WantedBy=avaas.target
+

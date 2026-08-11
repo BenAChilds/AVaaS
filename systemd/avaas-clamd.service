@@ -1,0 +1,24 @@
+[Unit]
+Description=AVaaS ClamAV daemon
+After=network.target avaas-freshclam.service
+PartOf=avaas.target
+
+[Service]
+Type=simple
+User=avaas
+Group=avaas
+ExecStart=/usr/bin/env clamd --foreground --config-file=/etc/avaas/clamd.conf
+Restart=on-failure
+RestartSec=10s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/var/lib/avaas/clamav /var/lib/avaas/clamav-tmp /var/log/avaas /var/spool/avaas /run/avaas
+
+[Install]
+WantedBy=avaas.target

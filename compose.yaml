@@ -1,0 +1,141 @@
+name: avaas
+services:
+  init:
+    build: .
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        chown -R 10001:10001 /var/lib/avaas /etc/avaas-secrets &&
+        chown -R 10001:10001 /var/spool/avaas /var/log/avaas &&
+        chmod 0755 /var/spool/avaas && chmod 1777 /var/log/avaas /run/avaas /var/lib/clamav-tmp &&
+        test -s /etc/avaas-secrets/api-key.pepper || head -c 48 /dev/urandom | base64 > /etc/avaas-secrets/api-key.pepper &&
+        test -s /etc/avaas-secrets/url-encryption.key || head -c 48 /dev/urandom | base64 > /etc/avaas-secrets/url-encryption.key &&
+        chown 10001:10001 /etc/avaas-secrets/* && chmod 0400 /etc/avaas-secrets/*
+    volumes:
+      - avaas_data:/var/lib/avaas
+      - avaas_spool:/var/spool/avaas
+      - avaas_logs:/var/log/avaas
+      - avaas_run:/run/avaas
+      - avaas_secrets:/etc/avaas-secrets
+      - clamav_db:/var/lib/clamav
+      - clamav_tmp:/var/lib/clamav-tmp
+    restart: "no"
+
+  clamav:
+    image: clamav/clamav:1.5
+    # The official ClamAV image is currently amd64-only; Docker Desktop uses emulation on Apple Silicon.
+    platform: ${CLAMAV_PLATFORM:-linux/amd64}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - ./configs/clamd.conf:/etc/clamav/clamd.conf:ro
+      - ./configs/freshclam.conf:/etc/clamav/freshclam.conf:ro
+      - avaas_spool:/var/spool/avaas:ro
+      - avaas_logs:/var/log/avaas
+      - avaas_run:/run/avaas
+      - clamav_db:/var/lib/clamav
+      - clamav_tmp:/var/lib/clamav-tmp
+    healthcheck:
+      test: ["CMD", "clamdscan", "--config-file=/etc/clamav/clamd.conf", "--ping", "3"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 5m
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    # The official entrypoint initializes database ownership before dropping to the clamav user.
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"]
+
+  clamav-reload:
+    image: clamav/clamav:1.5
+    platform: ${CLAMAV_PLATFORM:-linux/amd64}
+    entrypoint: ["clamdscan"]
+    command: ["--config-file=/etc/clamav/clamd.conf", "--reload"]
+    depends_on:
+      clamav:
+        condition: service_healthy
+    volumes:
+      - ./configs/clamd.conf:/etc/clamav/clamd.conf:ro
+      - avaas_run:/run/avaas
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+  api:
+    build: .
+    command: ["serve"]
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      clamav:
+        condition: service_healthy
+      clamav-reload:
+        condition: service_completed_successfully
+    group_add: ["100"]
+    ports: ["127.0.0.1:8080:8080"]
+    volumes:
+      - avaas_data:/var/lib/avaas
+      - avaas_logs:/var/log/avaas
+      - avaas_run:/run/avaas
+      - avaas_secrets:/etc/avaas-secrets:ro
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,size=32m"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build: .
+    command: ["worker"]
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      clamav:
+        condition: service_healthy
+      clamav-reload:
+        condition: service_completed_successfully
+    group_add: ["100"]
+    volumes:
+      - avaas_data:/var/lib/avaas
+      - avaas_spool:/var/spool/avaas
+      - avaas_logs:/var/log/avaas
+      - avaas_run:/run/avaas
+      - avaas_secrets:/etc/avaas-secrets:ro
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,size=32m"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    profiles: ["valkey"]
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+volumes:
+  avaas_data:
+  avaas_spool:
+  avaas_logs:
+  avaas_run:
+  avaas_secrets:
+  clamav_db:
+  clamav_tmp:

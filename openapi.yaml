@@ -1,0 +1,232 @@
+openapi: 3.1.0
+info:
+  title: AVaaS API
+  version: 1.0.0
+  description: Asynchronous ClamAV scanning for public HTTP(S) URLs.
+  license:
+    name: GNU General Public License v3.0
+    identifier: GPL-3.0-only
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+paths:
+  /v1/scans:
+    post:
+      summary: Submit a URL for asynchronous malware scanning
+      operationId: createScan
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema: {type: string, maxLength: 200}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [url]
+              properties:
+                url: {type: string, format: uri, pattern: '^https?://'}
+      responses:
+        '202':
+          description: Scan queued
+          headers:
+            Location: {schema: {type: string, format: uri}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Submission'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /v1/scans/{job_id}:
+    get:
+      summary: Retrieve the current state and result of a scan
+      operationId: getScan
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Current scan state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Scan'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/queue:
+    get:
+      summary: Retrieve service-wide queue counts
+      operationId: getQueue
+      responses:
+        '200':
+          description: Queue counts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queued, active, retrying, scheduled, total]
+                properties:
+                  queued: {type: integer}
+                  active: {type: integer}
+                  retrying: {type: integer}
+                  scheduled: {type: integer}
+                  total: {type: integer}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /v1/system/clamav:
+    get:
+      summary: Retrieve the ClamAV engine and definition versions
+      operationId: getClamAVVersion
+      responses:
+        '200':
+          description: ClamAV engine and definitions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  engine_version: {type: string}
+                  definition_version: {type: string}
+                  definition_date: {type: string}
+                  ready: {type: boolean}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/stats:
+    get:
+      summary: Retrieve aggregate scan and notification statistics
+      operationId: getStats
+      responses:
+        '200':
+          description: Aggregate service statistics
+          content:
+            application/json:
+              schema: {type: object}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /v1/logs:
+    get:
+      summary: Retrieve bounded and sanitized service logs
+      operationId: getLogs
+      parameters:
+        - name: source
+          in: query
+          schema: {type: string, enum: [api, worker, clamav, freshclam, all], default: all}
+        - name: level
+          in: query
+          schema: {type: string}
+        - name: since
+          in: query
+          schema: {type: string, format: date-time}
+        - name: until
+          in: query
+          schema: {type: string, format: date-time}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+        - name: cursor
+          in: query
+          schema: {type: string}
+      responses:
+        '200':
+          description: Sanitized log records
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [records]
+                properties:
+                  records:
+                    type: array
+                    items: {$ref: '#/components/schemas/LogRecord'}
+                  next_cursor: {type: string}
+        '410':
+          description: Cursor invalidated by retention or rotation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /health/live:
+    get:
+      summary: Check whether the API process is alive
+      security: []
+      operationId: liveness
+      responses:
+        '200': {description: Process is alive}
+  /health/ready:
+    get:
+      summary: Check whether AVaaS and its required dependencies are ready
+      security: []
+      operationId: readiness
+      responses:
+        '200': {description: Service is ready}
+        '503': {$ref: '#/components/responses/Unavailable'}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: AVaaS API key
+  schemas:
+    Submission:
+      type: object
+      required: [id, status, status_url]
+      properties:
+        id: {type: string}
+        status: {type: string, const: queued}
+        status_url: {type: string, format: uri}
+    Scan:
+      type: object
+      required: [id, status, attempts, max_attempts, created_at]
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [queued, downloading, scanning, retrying, completed]}
+        verdict: {type: string, enum: [clean, infected, error]}
+        signature: {type: string}
+        error_code: {type: string}
+        attempts: {type: integer}
+        max_attempts: {type: integer}
+        bytes: {type: integer, format: int64}
+        download_ms: {type: integer, format: int64}
+        scan_ms: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        started_at: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time}
+    LogRecord:
+      type: object
+      required: [timestamp, source, level, message]
+      properties:
+        timestamp: {type: string, format: date-time}
+        source: {type: string, enum: [api, worker, clamav, freshclam]}
+        level: {type: string}
+        message: {type: string}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+  responses:
+    BadRequest:
+      description: Invalid request
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unauthorized:
+      description: Invalid or missing API key
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Forbidden:
+      description: Insufficient scope
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    NotFound:
+      description: Resource not found
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    RateLimited:
+      description: Rate limited or queue full
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unavailable:
+      description: Dependency unavailable
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}

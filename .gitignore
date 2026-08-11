@@ -1,0 +1,10 @@
+.env
+*.db
+*.db-shm
+*.db-wal
+*.log
+bin/
+dist/
+coverage.out
+.DS_Store
+
