@@ -30,7 +30,7 @@ type Worker struct {
 }
 
 func New(cfg config.Config, s *store.Store, cipher *auth.URLCipher, p notify.Publisher, log *slog.Logger) (*Worker, error) {
-	d, err := download.New(cfg.SpoolDir, cfg.MaxFileBytes, cfg.DownloadTimeout)
+	d, err := download.New(cfg.SpoolDir, cfg.MaxFileBytes, cfg.DownloadTimeout, cfg.DownloadAllowedPrivateHosts)
 	if err != nil {
 		return nil, err
 	}

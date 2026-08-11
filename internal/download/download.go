@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	ErrBlocked  = errors.New("destination is not public")
+	ErrBlocked  = errors.New("destination is blocked")
 	ErrTooLarge = errors.New("file exceeds maximum size")
 	ErrHTTP     = errors.New("remote HTTP error")
 )
@@ -37,28 +37,23 @@ type Downloader struct {
 	spool  string
 }
 
-func New(spool string, max int64, timeout time.Duration) (*Downloader, error) {
+type lookupNetIPFunc func(context.Context, string, string) ([]netip.Addr, error)
+type dialContextFunc func(context.Context, string, string) (net.Conn, error)
+
+func New(spool string, max int64, timeout time.Duration, allowedPrivateHosts []string) (*Downloader, error) {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	return newWithNetwork(spool, max, timeout, allowedPrivateHosts, net.DefaultResolver.LookupNetIP, dialer.DialContext)
+}
+
+func newWithNetwork(spool string, max int64, timeout time.Duration, allowedPrivateHosts []string, lookup lookupNetIPFunc, dial dialContextFunc) (*Downloader, error) {
 	if err := os.MkdirAll(spool, 0o755); err != nil {
 		return nil, err
 	}
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	transport := &http.Transport{Proxy: nil, DisableCompression: true, MaxIdleConns: 10, IdleConnTimeout: 30 * time.Second, TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: 30 * time.Second, ExpectContinueTimeout: 2 * time.Second, DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			return nil, err
-		}
-		ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		if err != nil {
-			return nil, err
-		}
-		for _, ip := range ips {
-			if !isPublic(ip) {
-				continue
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		}
-		return nil, ErrBlocked
-	}}
+	allowed := make(map[string]struct{}, len(allowedPrivateHosts))
+	for _, host := range allowedPrivateHosts {
+		allowed[canonicalHost(host)] = struct{}{}
+	}
+	transport := &http.Transport{Proxy: nil, DisableCompression: true, MaxIdleConns: 10, IdleConnTimeout: 30 * time.Second, TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: 30 * time.Second, ExpectContinueTimeout: 2 * time.Second, DialContext: destinationDialer(allowed, lookup, dial)}
 	c := &http.Client{Transport: transport, Timeout: timeout}
 	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
@@ -67,6 +62,26 @@ func New(spool string, max int64, timeout time.Duration) (*Downloader, error) {
 		return ValidateURL(req.URL)
 	}
 	return &Downloader{client: c, max: max, spool: spool}, nil
+}
+
+func destinationDialer(allowedPrivateHosts map[string]struct{}, lookup lookupNetIPFunc, dial dialContextFunc) dialContextFunc {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := lookup(ctx, "ip", host)
+		if err != nil {
+			return nil, err
+		}
+		for _, ip := range ips {
+			if !addressAllowed(host, ip, allowedPrivateHosts) {
+				continue
+			}
+			return dial(ctx, network, net.JoinHostPort(ip.String(), port))
+		}
+		return nil, ErrBlocked
+	}
 }
 
 func ValidateURL(u *url.URL) error {
@@ -79,19 +94,34 @@ func ValidateURL(u *url.URL) error {
 	return nil
 }
 
-var blocked = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("169.254.0.0/16"), netip.MustParsePrefix("172.16.0.0/12"), netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("192.168.0.0/16"), netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("224.0.0.0/4"), netip.MustParsePrefix("240.0.0.0/4"),
-	netip.MustParsePrefix("::/128"), netip.MustParsePrefix("::1/128"), netip.MustParsePrefix("fc00::/7"), netip.MustParsePrefix("fe80::/10"), netip.MustParsePrefix("ff00::/8"), netip.MustParsePrefix("2001:db8::/32"),
+var alwaysBlocked = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("169.254.0.0/16"), netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("224.0.0.0/4"), netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/128"), netip.MustParsePrefix("::1/128"), netip.MustParsePrefix("fe80::/10"), netip.MustParsePrefix("ff00::/8"), netip.MustParsePrefix("2001:db8::/32"),
 }
 
 func isPublic(a netip.Addr) bool {
+	return addressAllowed("", a, nil)
+}
+
+func addressAllowed(host string, a netip.Addr, allowedPrivateHosts map[string]struct{}) bool {
 	a = a.Unmap()
-	for _, p := range blocked {
+	for _, p := range alwaysBlocked {
 		if p.Contains(a) {
 			return false
 		}
 	}
-	return a.IsValid() && !a.IsLoopback() && !a.IsMulticast() && !a.IsPrivate() && !a.IsUnspecified()
+	if !a.IsValid() || a.IsLoopback() || a.IsMulticast() || a.IsUnspecified() {
+		return false
+	}
+	if !a.IsPrivate() {
+		return true
+	}
+	_, allowed := allowedPrivateHosts[canonicalHost(host)]
+	return allowed
+}
+
+func canonicalHost(host string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 }
 
 func (d *Downloader) Fetch(ctx context.Context, id, raw string) (res Result, err error) {
