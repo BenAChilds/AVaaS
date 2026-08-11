@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -trim
     -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
     -o /out/avaas ./cmd/avaas
 
-FROM alpine:3.22
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates tzdata && addgroup -g 10001 avaas && adduser -D -H -u 10001 -G avaas avaas \
     && install -d -o avaas -g avaas -m 0750 /var/lib/avaas /var/log/avaas /var/spool/avaas /run/avaas /etc/avaas
 COPY --from=build /out/avaas /usr/local/bin/avaas
