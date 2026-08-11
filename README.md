@@ -119,6 +119,15 @@ avaas keys revoke KEY_ID --reason "integration retired"
 
 `scan` permits submission. `admin` implies all access and permits global queue/statistics and cross-owner job reads. Revocation is checked on every request. The CLI refuses to revoke the final administrator unless `--yes` is supplied.
 
+Reset aggregate statistics while preserving jobs and API keys with:
+
+```sh
+avaas stats reset --yes
+avaas stats reset --yes --json
+```
+
+This deletes hourly aggregate buckets and notification publication history. The explicit `--yes` guard is always required. With Compose, prefix the command with `docker compose exec api`.
+
 With Compose, prefix commands with `docker compose exec api`. The token is printed exactly once; descriptions are metadata and must not contain secrets.
 
 ## Configuration
@@ -134,7 +143,7 @@ AVaaS reads environment variables and optionally a `KEY=VALUE` file supplied as 
 | `AVAAS_ENCRYPTION_KEY_FILE` | `/etc/avaas/url-encryption.key` | Queued-URL encryption secret          |
 | `AVAAS_SPOOL_DIR`           | `/var/spool/avaas`              | Temporary downloads                   |
 | `AVAAS_LOG_DIR`             | `/var/log/avaas`                | Rotated API/worker/ClamAV logs        |
-| `AVAAS_CLAMD_SOCKET`        | `/run/avaas/clamd.sock`         | Private clamd Unix socket             |
+| `AVAAS_CLAMD_SOCKET`        | `/run/clamav/clamd.sock`        | Docker socket; native installs use `/run/avaas/clamd.sock` |
 | `AVAAS_MAX_FILE_BYTES`      | `2147483648`                    | Hard download limit                   |
 | `AVAAS_QUEUE_LIMIT`         | `1000`                          | Outstanding-job ceiling               |
 | `AVAAS_WORKER_CONCURRENCY`  | `1`                             | Simultaneous downloads/scans          |
@@ -143,6 +152,8 @@ AVaaS reads environment variables and optionally a `KEY=VALUE` file supplied as 
 | `AVAAS_DOWNLOAD_TIMEOUT`    | `2h`                            | Per-attempt download/scan deadline    |
 
 Concurrency multiplies spool and ClamAV load. Provision at least `concurrency × 2 GiB` of spool space plus ClamAV extraction headroom.
+
+Compose also mounts the socket at the legacy `/run/avaas/clamd.sock` path so existing `.env` files continue to work. New installations should use `/run/clamav/clamd.sock`, which matches the official ClamAV container entrypoint.
 
 ### Optional Valkey notifications
 

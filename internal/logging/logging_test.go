@@ -1,6 +1,10 @@
 package logging
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,5 +16,16 @@ func TestSanitize(t *testing.T) {
 		if strings.Contains(got, secret) {
 			t.Fatalf("sensitive value %q survived: %s", secret, got)
 		}
+	}
+}
+
+func TestReadReportsUnreadableSource(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "clamav.log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Read(context.Background(), dir, Query{Source: "clamav"})
+	if !errors.Is(err, ErrLogUnreadable) {
+		t.Fatalf("expected unreadable error, got %v", err)
 	}
 }

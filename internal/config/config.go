@@ -126,7 +126,7 @@ func Load(path string) (Config, error) {
 		return c, errors.New("queue limit, concurrency, attempts, and max file bytes must be positive")
 	}
 	if c.ValkeyEnabled && (c.ValkeyHost == "" || c.ValkeyTopic == "") {
-		return c, errors.New("Valkey host and topic are required when Valkey is enabled")
+		return c, errors.New("valkey host and topic are required when Valkey is enabled")
 	}
 	return c, nil
 }
@@ -136,7 +136,7 @@ func loadEnvFile(path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())

@@ -89,7 +89,7 @@ func ListKeys(ctx context.Context, s *Store, includeRevoked bool) ([]model.APIKe
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []model.APIKey
 	for rows.Next() {
 		var k model.APIKey

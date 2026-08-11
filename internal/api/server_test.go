@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -15,7 +16,7 @@ import (
 	"github.com/benachilds/avaas/internal/store"
 )
 
-func testServer(t *testing.T) (http.Handler, *store.Store, []byte, string) {
+func testServer(t *testing.T) (http.Handler, *store.Store, []byte, string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -40,7 +41,7 @@ func testServer(t *testing.T) (http.Handler, *store.Store, []byte, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(cfg, s, pepper, cipher, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))).Handler(), s, pepper, token
+	return New(cfg, s, pepper, cipher, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))).Handler(), s, pepper, token, cfg.LogDir
 }
 func request(t *testing.T, h http.Handler, method, path, token string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
@@ -57,7 +58,7 @@ func request(t *testing.T, h http.Handler, method, path, token string, body []by
 }
 
 func TestSubmitPollQueueAndRevoke(t *testing.T) {
-	h, s, _, token := testServer(t)
+	h, s, _, token, _ := testServer(t)
 	unauthorized := request(t, h, http.MethodPost, "/v1/scans", "", []byte(`{"url":"https://example.org/file"}`))
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status %d", unauthorized.Code)
@@ -81,6 +82,10 @@ func TestSubmitPollQueueAndRevoke(t *testing.T) {
 	if queue.Code != http.StatusOK || !bytes.Contains(queue.Body.Bytes(), []byte(`"queued":1`)) {
 		t.Fatalf("queue: %d %s", queue.Code, queue.Body.String())
 	}
+	stats := request(t, h, http.MethodGet, "/v1/stats", token, nil)
+	if stats.Code != http.StatusOK || !bytes.Contains(stats.Body.Bytes(), []byte(`"enabled":false`)) || !bytes.Contains(stats.Body.Bytes(), []byte(`"last_published_at":null`)) {
+		t.Fatalf("disabled notification stats: %d %s", stats.Code, stats.Body.String())
+	}
 	keys, err := store.ListKeys(context.Background(), s, false)
 	if err != nil {
 		t.Fatal(err)
@@ -95,11 +100,22 @@ func TestSubmitPollQueueAndRevoke(t *testing.T) {
 }
 
 func TestRejectsUnsafeInputBeforeQueue(t *testing.T) {
-	h, _, _, token := testServer(t)
+	h, _, _, token, _ := testServer(t)
 	for _, body := range []string{`{"url":"file:///etc/passwd"}`, `{"url":"https://user:pass@example.org/file"}`, `{"url":"https://example.org","extra":true}`} {
 		w := request(t, h, http.MethodPost, "/v1/scans", token, []byte(body))
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("body %s returned %d", body, w.Code)
 		}
+	}
+}
+
+func TestLogsReportUnreadableSource(t *testing.T) {
+	h, _, _, token, logDir := testServer(t)
+	if err := os.MkdirAll(filepath.Join(logDir, "worker.jsonl"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w := request(t, h, http.MethodGet, "/v1/logs?source=worker", token, nil)
+	if w.Code != http.StatusInternalServerError || !bytes.Contains(w.Body.Bytes(), []byte(`"code":"logs_unavailable"`)) {
+		t.Fatalf("unreadable logs: %d %s", w.Code, w.Body.String())
 	}
 }

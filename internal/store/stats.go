@@ -67,6 +67,40 @@ func EventFailed(ctx context.Context, s *Store, id, msg string) error {
 	_, err := s.DB.ExecContext(ctx, `UPDATE outbox SET attempts=attempts+1,last_error=?,next_attempt_at=? WHERE event_id=?`, msg, timeText(time.Now().Add(30*time.Second)), id)
 	return err
 }
+
+func DropPendingEvents(ctx context.Context, s *Store) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM outbox WHERE published_at IS NULL`)
+	return err
+}
+
+type ResetStatsResult struct {
+	BucketsDeleted                   int64 `json:"buckets_deleted"`
+	NotificationHistoryDeleted       int64 `json:"notification_history_deleted"`
+	PendingNotificationFailuresReset int64 `json:"pending_notification_failures_reset"`
+}
+
+func ResetStats(ctx context.Context, s *Store) (ResetStatsResult, error) {
+	var result ResetStatsResult
+	err := withTx(ctx, s.DB, func(tx *sql.Tx) error {
+		r, err := tx.ExecContext(ctx, `DELETE FROM hourly_stats`)
+		if err != nil {
+			return err
+		}
+		result.BucketsDeleted, _ = r.RowsAffected()
+		r, err = tx.ExecContext(ctx, `DELETE FROM outbox WHERE published_at IS NOT NULL`)
+		if err != nil {
+			return err
+		}
+		result.NotificationHistoryDeleted, _ = r.RowsAffected()
+		r, err = tx.ExecContext(ctx, `UPDATE outbox SET attempts=0,last_error='' WHERE published_at IS NULL AND (attempts>0 OR last_error!='')`)
+		if err != nil {
+			return err
+		}
+		result.PendingNotificationFailuresReset, _ = r.RowsAffected()
+		return nil
+	})
+	return result, err
+}
 func OutboxStats(ctx context.Context, s *Store) (pending, failures int64, last *time.Time, err error) {
 	var lastText sql.NullString
 	err = s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FILTER(WHERE published_at IS NULL),COALESCE(SUM(attempts),0),MAX(published_at) FROM outbox`).Scan(&pending, &failures, &lastText)

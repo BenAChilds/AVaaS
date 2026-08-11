@@ -70,7 +70,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 		if *migrateJSON {
 			return json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "message": "database migrations applied"})
 		}
@@ -80,6 +80,8 @@ func run(args []string) error {
 		return keygen(ctx, cfg, args[1:])
 	case "keys":
 		return keys(ctx, cfg, args[1:])
+	case "stats":
+		return stats(ctx, cfg, args[1:])
 	case "serve":
 		return serve(ctx, cfg)
 	case "worker":
@@ -92,7 +94,7 @@ func run(args []string) error {
 }
 func usage() error {
 	fmt.Fprintln(os.Stderr, `AVaaS (Anti-Virus as a Service)
-Usage: avaas [--config FILE] <serve|worker|migrate|keygen|keys|doctor|version>`)
+Usage: avaas [--config FILE] <serve|worker|migrate|keygen|keys|stats|doctor|version>`)
 	return errors.New("a valid command is required")
 }
 func openStore(ctx context.Context, c config.Config) (*store.Store, error) {
@@ -101,8 +103,7 @@ func openStore(ctx context.Context, c config.Config) (*store.Store, error) {
 		return nil, err
 	}
 	if err = s.Migrate(ctx); err != nil {
-		s.Close()
-		return nil, err
+		return nil, errors.Join(err, s.Close())
 	}
 	return s, nil
 }
@@ -123,7 +124,7 @@ func serve(ctx context.Context, c config.Config) error {
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	pepper, cipher, err := cryptoConfig(c)
 	if err != nil {
 		return err
@@ -155,7 +156,7 @@ func work(ctx context.Context, c config.Config) error {
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	_, cipher, err := cryptoConfig(c)
 	if err != nil {
 		return err
@@ -180,6 +181,34 @@ func work(ctx context.Context, c config.Config) error {
 	}
 	return err
 }
+func stats(ctx context.Context, c config.Config, args []string) error {
+	if len(args) == 0 || args[0] != "reset" {
+		return errors.New("usage: avaas stats reset --yes [--json]")
+	}
+	fs := flag.NewFlagSet("stats reset", flag.ContinueOnError)
+	yes := fs.Bool("yes", false, "confirm resetting aggregate statistics")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if !*yes {
+		return errors.New("stats reset requires --yes; jobs and API keys are preserved")
+	}
+	s, err := openStore(ctx, c)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+	result, err := store.ResetStats(ctx, s)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return json.NewEncoder(os.Stdout).Encode(result)
+	}
+	fmt.Printf("statistics reset (buckets=%d, notification_history=%d, pending_notification_failures=%d); jobs and API keys were preserved\n", result.BucketsDeleted, result.NotificationHistoryDeleted, result.PendingNotificationFailuresReset)
+	return nil
+}
 func keygen(ctx context.Context, c config.Config, args []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
 	description := fs.String("description", "", "human-readable key description")
@@ -192,7 +221,7 @@ func keygen(ctx context.Context, c config.Config, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	pepper, err := config.ReadSecret(c.PepperFile, 32)
 	if err != nil {
 		return err
@@ -219,7 +248,7 @@ func keys(ctx context.Context, c config.Config, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	switch args[0] {
 	case "list":
 		fs := flag.NewFlagSet("keys list", flag.ContinueOnError)
@@ -236,9 +265,13 @@ func keys(ctx context.Context, c config.Config, args []string) error {
 			return json.NewEncoder(os.Stdout).Encode(ks)
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tDESCRIPTION\tSCOPES\tCREATED\tLAST USED\tREVOKED")
+		if _, err := fmt.Fprintln(w, "ID\tDESCRIPTION\tSCOPES\tCREATED\tLAST USED\tREVOKED"); err != nil {
+			return err
+		}
 		for _, k := range ks {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", k.ID, k.Description, strings.Join(k.Scopes, ","), k.CreatedAt.Format(time.RFC3339), formatTime(k.LastUsedAt), formatTime(k.RevokedAt))
+			if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", k.ID, k.Description, strings.Join(k.Scopes, ","), k.CreatedAt.Format(time.RFC3339), formatTime(k.LastUsedAt), formatTime(k.RevokedAt)); err != nil {
+				return err
+			}
 		}
 		return w.Flush()
 	case "revoke":
@@ -293,7 +326,7 @@ func doctor(ctx context.Context, c config.Config, args []string) error {
 		checks["database"] = err.Error()
 	} else {
 		checks["database"] = "ok"
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 	}
 	if _, _, err := cryptoConfig(c); err != nil {
 		checks["secrets"] = err.Error()

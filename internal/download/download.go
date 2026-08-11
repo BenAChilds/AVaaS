@@ -74,7 +74,7 @@ func ValidateURL(u *url.URL) error {
 		return errors.New("only HTTP and HTTPS URLs with a host are supported")
 	}
 	if u.User != nil {
-		return errors.New("URL user information is not supported")
+		return errors.New("url user information is not supported")
 	}
 	return nil
 }
@@ -113,7 +113,7 @@ func (d *Downloader) Fetch(ctx context.Context, id, raw string) (res Result, err
 	if err != nil {
 		return res, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return res, HTTPError{Status: resp.StatusCode}
 	}

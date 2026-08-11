@@ -32,7 +32,7 @@ type Job struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	StartedAt       *time.Time `json:"started_at,omitempty"`
 	CompletedAt     *time.Time `json:"completed_at,omitempty"`
-	NextAttemptAt   time.Time  `json:"next_attempt_at,omitempty"`
+	NextAttemptAt   *time.Time `json:"next_attempt_at,omitempty"`
 	LeaseOwner      string     `json:"-"`
 	LeaseUntil      *time.Time `json:"-"`
 }
