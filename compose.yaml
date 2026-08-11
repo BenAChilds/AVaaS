@@ -130,6 +130,7 @@ services:
   valkey:
     image: valkey/valkey:8-alpine
     profiles: ["valkey"]
+    user: valkey
     command: ["valkey-server", "--save", "", "--appendonly", "no"]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
