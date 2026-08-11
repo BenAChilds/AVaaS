@@ -1,13 +1,32 @@
 name: Release
 on:
   push:
-    tags: ['v*']
+    tags: ['v*', '!v*b']
 permissions:
   contents: write
   packages: write
+  attestations: write
   id-token: write
 jobs:
+  verify_branch:
+    runs-on: ubuntu-latest
+    outputs:
+      matches: ${{ steps.branch.outputs.matches }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Check tag is on main
+        id: branch
+        run: |
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "matches=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Skipping stable release because the tagged commit is not on main"
+            echo "matches=false" >> "$GITHUB_OUTPUT"
+          fi
   release:
+    needs: verify_branch
+    if: needs.verify_branch.outputs.matches == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

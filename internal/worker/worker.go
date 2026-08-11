@@ -30,7 +30,7 @@ type Worker struct {
 }
 
 func New(cfg config.Config, s *store.Store, cipher *auth.URLCipher, p notify.Publisher, log *slog.Logger) (*Worker, error) {
-	d, err := download.New(cfg.SpoolDir, cfg.MaxFileBytes, cfg.DownloadTimeout)
+	d, err := download.New(cfg.SpoolDir, cfg.MaxFileBytes, cfg.DownloadTimeout, cfg.DownloadAllowedPrivateHosts)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +64,7 @@ func (w *Worker) loop(ctx context.Context) {
 			sleep(ctx, time.Second)
 			continue
 		}
+		w.log.Info("scan claimed", "job_id", j.ID, "attempt", j.Attempts)
 		w.process(ctx, j)
 	}
 }
@@ -91,17 +92,26 @@ func (w *Worker) process(parent context.Context, j model.Job) {
 	raw, err := w.cipher.Decrypt(j.EncryptedURL)
 	if err != nil {
 		_ = store.CompleteJob(ctx, w.store, j.ID, w.id, model.VerdictError, "", "decrypt_failed", 0)
+		w.log.Error("scan completed with error", "job_id", j.ID, "error_code", "decrypt_failed")
 		return
 	}
+	w.log.Info("download started", "job_id", j.ID, "scheme", j.URLScheme, "host_fingerprint", j.HostFingerprint)
 	r, err := w.downloader.Fetch(ctx, j.ID, raw)
 	if err != nil {
 		w.fail(ctx, j, err)
 		return
 	}
-	defer os.Remove(r.Path)
+	w.log.Info("download completed", "job_id", j.ID, "bytes", r.Bytes, "download_ms", r.Duration.Milliseconds())
+	defer func() {
+		if removeErr := os.Remove(r.Path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			w.log.Error("spool cleanup failed", "job_id", j.ID, "error", removeErr)
+		}
+	}()
 	if err = store.SetScanning(ctx, w.store, j.ID, w.id, r.Bytes, r.Duration.Milliseconds(), w.cfg.LeaseDuration); err != nil {
+		w.log.Error("set scanning state failed", "job_id", j.ID, "error", err)
 		return
 	}
+	w.log.Info("scan started", "job_id", j.ID, "bytes", r.Bytes)
 	start := time.Now()
 	scan, err := w.clam.Scan(ctx, r.Path)
 	elapsed := time.Since(start).Milliseconds()
@@ -115,7 +125,13 @@ func (w *Worker) process(parent context.Context, j model.Job) {
 	}
 	if err = store.CompleteJob(ctx, w.store, j.ID, w.id, verdict, scan.Signature, "", elapsed); err != nil {
 		w.log.Error("complete job failed", "job_id", j.ID, "error", err)
+		return
 	}
+	attrs := []any{"job_id", j.ID, "verdict", verdict, "bytes", r.Bytes, "download_ms", r.Duration.Milliseconds(), "scan_ms", elapsed}
+	if scan.Infected {
+		attrs = append(attrs, "signature", scan.Signature)
+	}
+	w.log.Info("scan completed", attrs...)
 }
 func (w *Worker) fail(ctx context.Context, j model.Job, err error) {
 	code := "temporary_failure"
@@ -135,10 +151,12 @@ func (w *Worker) fail(ctx context.Context, j model.Job, err error) {
 	}
 	if !retry {
 		_ = store.CompleteJob(ctx, w.store, j.ID, w.id, model.VerdictError, "", code, 0)
+		w.log.Warn("scan completed with error", "job_id", j.ID, "error_code", code, "attempt", j.Attempts)
 		return
 	}
 	backoff := time.Duration(1<<min(j.Attempts, 6)) * time.Second
 	_ = store.RetryJob(ctx, w.store, j.ID, w.id, code, backoff)
+	w.log.Warn("scan scheduled for retry", "job_id", j.ID, "error_code", code, "attempt", j.Attempts, "backoff_ms", backoff.Milliseconds())
 }
 func (w *Worker) maintenance(ctx context.Context) {
 	tick := time.NewTicker(5 * time.Second)
@@ -151,7 +169,11 @@ func (w *Worker) maintenance(ctx context.Context) {
 			return
 		case <-tick.C:
 			_ = store.Heartbeat(ctx, w.store, w.id)
-			w.publishOne(ctx)
+			if w.cfg.ValkeyEnabled {
+				w.publishOne(ctx)
+			} else {
+				_ = store.DropPendingEvents(ctx, w.store)
+			}
 		case <-clean.C:
 			_ = store.Cleanup(ctx, w.store, w.cfg.ResultRetention)
 			_ = download.Cleanup(w.cfg.SpoolDir, w.cfg.DownloadTimeout+time.Hour)

@@ -103,7 +103,7 @@ func (s *Server) createScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	var in struct {
 		URL string `json:"url"`
 	}
@@ -141,12 +141,17 @@ func (s *Server) createScan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_idempotency_key", "idempotency key is too long")
 		return
 	}
-	job, _, err = store.CreateJob(r.Context(), s.store, job, idem, s.cfg.ResultRetention, event)
+	job, existing, err := store.CreateJob(r.Context(), s.store, job, idem, s.cfg.ResultRetention, event)
 	if err != nil {
 		writeError(w, 500, "database_error", "unable to create scan")
 		return
 	}
 	location := s.cfg.PublicBaseURL + "/v1/scans/" + job.ID
+	if existing {
+		s.log.Info("scan submission deduplicated", "job_id", job.ID)
+	} else {
+		s.log.Info("scan queued", "job_id", job.ID)
+	}
 	w.Header().Set("Location", location)
 	writeJSON(w, 202, map[string]any{"id": job.ID, "status": job.Status, "status_url": location})
 }
@@ -198,8 +203,12 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	daily, _ := store.Stats(r.Context(), s.store, time.Now().Add(-24*time.Hour))
-	pending, failures, last, _ := store.OutboxStats(r.Context(), s.store)
-	writeJSON(w, 200, map[string]any{"lifetime": lifetime, "last_24_hours": daily, "notifications": map[string]any{"enabled": s.cfg.ValkeyEnabled, "pending": pending, "publish_failures": failures, "last_published_at": last}})
+	notifications := map[string]any{"enabled": false, "pending": int64(0), "publish_failures": int64(0), "last_published_at": nil}
+	if s.cfg.ValkeyEnabled {
+		pending, failures, last, _ := store.OutboxStats(r.Context(), s.store)
+		notifications = map[string]any{"enabled": true, "pending": pending, "publish_failures": failures, "last_published_at": last}
+	}
+	writeJSON(w, 200, map[string]any{"lifetime": lifetime, "last_24_hours": daily, "notifications": notifications})
 }
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -240,6 +249,10 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	result, err := logstore.Read(r.Context(), s.cfg.LogDir, q)
 	if errors.Is(err, logstore.ErrCursorExpired) {
 		writeError(w, 410, "cursor_expired", "the log cursor is no longer valid")
+		return
+	}
+	if errors.Is(err, logstore.ErrLogUnreadable) {
+		writeError(w, 500, "logs_unavailable", "one or more requested log sources cannot be read")
 		return
 	}
 	if err != nil {

@@ -50,8 +50,6 @@ func CreateJob(ctx context.Context, s *Store, j model.Job, idem string, idemTTL 
 	return j, existing, err
 }
 
-type scanner interface{ Scan(...any) error }
-
 func getJob(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, id string) (model.Job, error) {
@@ -68,7 +66,10 @@ func getJob(ctx context.Context, q interface {
 	j.CreatedAt = parseTime(created)
 	j.StartedAt = nullableTime(started)
 	j.CompletedAt = nullableTime(completed)
-	j.NextAttemptAt = parseTime(next)
+	if j.Status != model.StatusCompleted {
+		nextAt := parseTime(next)
+		j.NextAttemptAt = &nextAt
+	}
 	j.LeaseUntil = nullableTime(lease)
 	return j, nil
 }
@@ -196,7 +197,7 @@ func QueueStats(ctx context.Context, s *Store) (model.QueueStats, error) {
 	if err != nil {
 		return v, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var st string
 		var n int64

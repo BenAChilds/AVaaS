@@ -7,4 +7,4 @@ bin/
 dist/
 coverage.out
 .DS_Store
-
+compose.override.yaml

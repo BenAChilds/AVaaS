@@ -28,17 +28,15 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(8)
 	db.SetConnMaxLifetime(0)
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, err
+	if err := retryBusy(context.Background(), func() error { return db.Ping() }); err != nil {
+		return nil, errors.Join(err, db.Close())
 	}
 	return &Store{DB: db}, nil
 }
 
 func (s *Store) Close() error { return s.DB.Close() }
 func (s *Store) Migrate(ctx context.Context) error {
-	_, err := s.DB.ExecContext(ctx, schema)
-	return err
+	return retryBusy(ctx, func() error { _, err := s.DB.ExecContext(ctx, schema); return err })
 }
 func (s *Store) Ping(ctx context.Context) error { return s.DB.PingContext(ctx) }
 
@@ -60,6 +58,25 @@ func parseScopes(v string) []string {
 	return strings.Split(v, ",")
 }
 func hourText(t time.Time) string { return t.UTC().Truncate(time.Hour).Format(time.RFC3339) }
+
+func retryBusy(ctx context.Context, fn func() error) error {
+	var err error
+	for attempt := 0; attempt < 50; attempt++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		lower := strings.ToLower(err.Error())
+		if !strings.Contains(lower, "locked") && !strings.Contains(lower, "busy") {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("database remained busy: %w", err)
+}
 
 func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, nil)

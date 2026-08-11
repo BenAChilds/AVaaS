@@ -1,9 +1,12 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -82,6 +85,13 @@ func TestJobLifecycleAndIdempotency(t *testing.T) {
 	if err != nil || finished.Verdict != model.VerdictClean || finished.Bytes != 1234 {
 		t.Fatalf("finish: %#v %v", finished, err)
 	}
+	encoded, err := json.Marshal(finished)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("next_attempt_at")) {
+		t.Fatalf("terminal job exposed next attempt: %s", encoded)
+	}
 	stats, err := Stats(ctx, s, time.Time{})
 	if err != nil || stats.Submitted != 1 || stats.Completed != 1 || stats.Clean != 1 {
 		t.Fatalf("stats: %#v %v", stats, err)
@@ -102,5 +112,85 @@ func TestOnlyOneWorkerCanClaim(t *testing.T) {
 	}
 	if _, err = ClaimJob(ctx, s, "two", time.Minute); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second claim = %v", err)
+	}
+}
+
+func TestResetStatsPreservesJobsAndKeys(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	pepper := []byte("this is a sufficiently long test pepper value")
+	key, _, err := GenerateKey(ctx, s, pepper, "admin", []string{"admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	j := model.Job{ID: "reset-job", PrincipalID: key.ID, EncryptedURL: []byte("secret"), URLScheme: "https", HostFingerprint: "host", MaxAttempts: 1, CreatedAt: now}
+	_, _, err = CreateJob(ctx, s, j, "", time.Hour, model.Event{SchemaVersion: 1, EventID: "reset-event", EventType: "scan.queued", JobID: j.ID, OccurredAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := Stats(ctx, s, time.Time{})
+	if err != nil || before.Submitted != 1 {
+		t.Fatalf("before reset: %#v %v", before, err)
+	}
+	if _, err = ResetStats(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	after, err := Stats(ctx, s, time.Time{})
+	if err != nil || after.Submitted != 0 {
+		t.Fatalf("after reset: %#v %v", after, err)
+	}
+	if _, err = GetJob(ctx, s, j.ID); err != nil {
+		t.Fatalf("job removed: %v", err)
+	}
+	keys, err := ListKeys(ctx, s, false)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("key removed: %#v %v", keys, err)
+	}
+}
+
+func TestDropPendingEventsWhenNotificationsDisabled(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	now := time.Now().UTC()
+	j := model.Job{ID: "drop-job", PrincipalID: "principal", EncryptedURL: []byte("secret"), URLScheme: "https", HostFingerprint: "host", MaxAttempts: 1, CreatedAt: now}
+	_, _, err := CreateJob(ctx, s, j, "", time.Hour, model.Event{SchemaVersion: 1, EventID: "drop-event", EventType: "scan.queued", JobID: j.ID, OccurredAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = PendingEvent(ctx, s); err != nil {
+		t.Fatalf("pending event missing: %v", err)
+	}
+	if err = DropPendingEvents(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = PendingEvent(ctx, s); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("disabled event retained: %v", err)
+	}
+}
+
+func TestConcurrentMigrationsWaitForSQLite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent.db")
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := Open(path)
+			if err == nil {
+				err = s.Migrate(ctx)
+				_ = s.Close()
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent migration: %v", err)
+		}
 	}
 }

@@ -52,7 +52,7 @@ func (c Client) command(ctx context.Context, command string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	deadline := time.Now().Add(c.Timeout)
 	if v, ok := ctx.Deadline(); ok && v.Before(deadline) {
 		deadline = v

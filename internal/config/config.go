@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,34 +13,35 @@ import (
 )
 
 type Config struct {
-	ListenAddress       string
-	PublicBaseURL       string
-	DatabasePath        string
-	PepperFile          string
-	EncryptionKeyFile   string
-	SpoolDir            string
-	LogDir              string
-	ClamdSocket         string
-	MaxFileBytes        int64
-	QueueLimit          int
-	WorkerConcurrency   int
-	MaxAttempts         int
-	ResultRetention     time.Duration
-	LeaseDuration       time.Duration
-	DownloadTimeout     time.Duration
-	DefinitionMaxAge    time.Duration
-	LogMaxBytes         int64
-	LogMaxFiles         int
-	ValkeyEnabled       bool
-	ValkeyHost          string
-	ValkeyPort          int
-	ValkeyUsername      string
-	ValkeyPasswordFile  string
-	ValkeyDatabase      int
-	ValkeyTLS           bool
-	ValkeyTLSServerName string
-	ValkeyTopic         string
-	OutboxLimit         int
+	ListenAddress               string
+	PublicBaseURL               string
+	DatabasePath                string
+	PepperFile                  string
+	EncryptionKeyFile           string
+	SpoolDir                    string
+	LogDir                      string
+	ClamdSocket                 string
+	MaxFileBytes                int64
+	QueueLimit                  int
+	WorkerConcurrency           int
+	MaxAttempts                 int
+	ResultRetention             time.Duration
+	LeaseDuration               time.Duration
+	DownloadTimeout             time.Duration
+	DownloadAllowedPrivateHosts []string
+	DefinitionMaxAge            time.Duration
+	LogMaxBytes                 int64
+	LogMaxFiles                 int
+	ValkeyEnabled               bool
+	ValkeyHost                  string
+	ValkeyPort                  int
+	ValkeyUsername              string
+	ValkeyPasswordFile          string
+	ValkeyDatabase              int
+	ValkeyTLS                   bool
+	ValkeyTLSServerName         string
+	ValkeyTopic                 string
+	OutboxLimit                 int
 }
 
 func Default() Config {
@@ -93,6 +95,9 @@ func Load(path string) (Config, error) {
 	if c.DownloadTimeout, err = envDuration("AVAAS_DOWNLOAD_TIMEOUT", c.DownloadTimeout); err != nil {
 		return c, err
 	}
+	if c.DownloadAllowedPrivateHosts, err = envHostList("AVAAS_DOWNLOAD_ALLOWED_PRIVATE_HOSTS"); err != nil {
+		return c, err
+	}
 	if c.DefinitionMaxAge, err = envDuration("AVAAS_DEFINITION_MAX_AGE", c.DefinitionMaxAge); err != nil {
 		return c, err
 	}
@@ -126,7 +131,7 @@ func Load(path string) (Config, error) {
 		return c, errors.New("queue limit, concurrency, attempts, and max file bytes must be positive")
 	}
 	if c.ValkeyEnabled && (c.ValkeyHost == "" || c.ValkeyTopic == "") {
-		return c, errors.New("Valkey host and topic are required when Valkey is enabled")
+		return c, errors.New("valkey host and topic are required when Valkey is enabled")
 	}
 	return c, nil
 }
@@ -136,7 +141,7 @@ func loadEnvFile(path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
@@ -204,6 +209,48 @@ func envDuration(k string, d time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s: %w", k, e)
 	}
 	return n, nil
+}
+
+func envHostList(k string) ([]string, error) {
+	raw := strings.TrimSpace(env(k, ""))
+	if raw == "" {
+		return nil, nil
+	}
+	seen := make(map[string]struct{})
+	hosts := make([]string, 0)
+	for _, item := range strings.Split(raw, ",") {
+		host, err := normalizeHost(item)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s entry %q: %w", k, strings.TrimSpace(item), err)
+		}
+		if _, exists := seen[host]; exists {
+			continue
+		}
+		seen[host] = struct{}{}
+		hosts = append(hosts, host)
+	}
+	return hosts, nil
+}
+
+func normalizeHost(raw string) (string, error) {
+	host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+	if host == "" || len(host) > 253 {
+		return "", errors.New("hostname is empty or too long")
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Unmap().String(), nil
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", errors.New("hostname contains an invalid label")
+		}
+		for _, char := range label {
+			if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' {
+				return "", errors.New("hostname contains unsupported characters")
+			}
+		}
+	}
+	return host, nil
 }
 
 func ReadSecret(path string, want int) ([]byte, error) {

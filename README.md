@@ -119,6 +119,15 @@ avaas keys revoke KEY_ID --reason "integration retired"
 
 `scan` permits submission. `admin` implies all access and permits global queue/statistics and cross-owner job reads. Revocation is checked on every request. The CLI refuses to revoke the final administrator unless `--yes` is supplied.
 
+Reset aggregate statistics while preserving jobs and API keys with:
+
+```sh
+avaas stats reset --yes
+avaas stats reset --yes --json
+```
+
+This deletes hourly aggregate buckets and notification publication history. The explicit `--yes` guard is always required. With Compose, prefix the command with `docker compose exec api`.
+
 With Compose, prefix commands with `docker compose exec api`. The token is printed exactly once; descriptions are metadata and must not contain secrets.
 
 ## Configuration
@@ -134,15 +143,50 @@ AVaaS reads environment variables and optionally a `KEY=VALUE` file supplied as 
 | `AVAAS_ENCRYPTION_KEY_FILE` | `/etc/avaas/url-encryption.key` | Queued-URL encryption secret          |
 | `AVAAS_SPOOL_DIR`           | `/var/spool/avaas`              | Temporary downloads                   |
 | `AVAAS_LOG_DIR`             | `/var/log/avaas`                | Rotated API/worker/ClamAV logs        |
-| `AVAAS_CLAMD_SOCKET`        | `/run/avaas/clamd.sock`         | Private clamd Unix socket             |
+| `AVAAS_CLAMD_SOCKET`        | `/run/clamav/clamd.sock`        | Docker socket; native installs use `/run/avaas/clamd.sock` |
 | `AVAAS_MAX_FILE_BYTES`      | `2147483648`                    | Hard download limit                   |
 | `AVAAS_QUEUE_LIMIT`         | `1000`                          | Outstanding-job ceiling               |
 | `AVAAS_WORKER_CONCURRENCY`  | `1`                             | Simultaneous downloads/scans          |
 | `AVAAS_MAX_ATTEMPTS`        | `3`                             | Initial attempt plus two retries      |
 | `AVAAS_RESULT_RETENTION`    | `24h`                           | Completed result retention            |
 | `AVAAS_DOWNLOAD_TIMEOUT`    | `2h`                            | Per-attempt download/scan deadline    |
+| `AVAAS_DOWNLOAD_ALLOWED_PRIVATE_HOSTS` | empty                 | Development-only exact hosts allowed to resolve privately |
 
 Concurrency multiplies spool and ClamAV load. Provision at least `concurrency × 2 GiB` of spool space plus ClamAV extraction headroom.
+
+Compose also mounts the socket at the legacy `/run/avaas/clamd.sock` path so existing `.env` files continue to work. New installations should use `/run/clamav/clamd.sock`, which matches the official ClamAV container entrypoint.
+
+### Local Valet development
+
+Private destinations remain blocked by default. `AVAAS_DOWNLOAD_ALLOWED_PRIVATE_HOSTS` is an explicit development exception for applications served from a trusted private address. It is read by the worker, accepts a comma-separated list of exact hostnames or IP literals, and does not support schemes, ports, paths, or wildcards.
+
+For a Laravel Valet site running on the macOS Docker host, add a `compose.override.yaml` that maps the exact Valet hostname to Docker's host gateway, explicitly allows that hostname, and mounts only Valet's public CA certificate:
+
+```yaml
+services:
+  worker:
+    extra_hosts:
+      - "simskies.test:host-gateway"
+    environment:
+      AVAAS_DOWNLOAD_ALLOWED_PRIVATE_HOSTS: simskies.test
+      SSL_CERT_FILE: /etc/avaas-dev/valet-ca.pem
+    volumes:
+      - /Users/you/.config/valet/CA/LaravelValetCASelfSigned.pem:/etc/avaas-dev/valet-ca.pem:ro
+```
+
+Only the worker needs these settings. Rebuild and recreate it, then confirm the effective configuration and hostname resolution:
+
+```sh
+docker compose up -d --build --force-recreate worker
+docker compose exec worker printenv AVAAS_DOWNLOAD_ALLOWED_PRIVATE_HOSTS
+docker compose exec worker getent hosts simskies.test
+```
+
+Valet's CA file may use `.pem` or `.crt`; the contents must be a PEM-encoded public certificate. Never mount `LaravelValetCASelfSigned.key` or another private key. `SSL_CERT_FILE` allows Go's HTTPS client to trust Valet without disabling certificate verification.
+
+Jobs that already completed with `blocked_destination` are terminal and are not reopened when the worker restarts. Submit a new job after changing the configuration and use a new `Idempotency-Key`; reusing the old key returns the original completed job.
+
+The exception permits only private unicast addresses for exact configured hosts. Loopback, link-local/cloud-metadata, carrier-grade NAT, benchmarking, documentation, multicast, unspecified, and reserved destinations remain blocked even if their hostname is listed. DNS is resolved and the address policy is reapplied for every connection and redirect, preventing an allowed hostname from rebinding or redirecting to a hard-blocked destination. Keep the allowlist empty in production unless private retrieval is an intentional, reviewed requirement.
 
 ### Optional Valkey notifications
 
@@ -202,7 +246,7 @@ Check the installation with `sudo -u avaas avaas doctor`, manage it with `system
 ## Security model and limitations
 
 - Only HTTP(S) URLs are accepted. Userinfo is rejected.
-- DNS is resolved for each connection and redirect; loopback, private, link-local, reserved, container, multicast, and metadata destinations are blocked.
+- DNS is resolved for each connection and redirect. Private unicast destinations require an exact opt-in hostname; loopback, link-local, reserved, multicast, and metadata destinations cannot be overridden.
 - Redirects, response headers, total duration, queue size, and downloaded bytes are bounded.
 - Presigned URLs are encrypted in SQLite and omitted from logs/results/events.
 - Downloaded files use generated names, are scanned over a private Unix socket, and are deleted rather than quarantined.
@@ -227,6 +271,8 @@ Run `gofmt`, `staticcheck`, `golangci-lint`, and `govulncheck` before a pull req
 - **Startup remains unhealthy:** the first definition download is large; inspect `docker compose logs clamav`.
 - **`database is locked`:** keep the database on a local Docker volume/filesystem and do not run unsupported multi-host workers.
 - **Downloads are blocked:** the resolved address is private/reserved or a redirect entered a blocked network.
+- **An allowed development host is still blocked:** rebuild and recreate the worker, confirm the exact hostname is present in `AVAAS_DOWNLOAD_ALLOWED_PRIVATE_HOSTS`, and use a new idempotency key. A hostname resolving to loopback, metadata/link-local, or another hard-blocked range is never permitted.
+- **A Valet download reports a temporary TLS failure:** mount Valet's public CA certificate into the worker and point `SSL_CERT_FILE` at it; do not mount the CA private key or disable TLS verification globally.
 - **Daily memory spike:** ensure `ConcurrentDatabaseReload no` is active and allocate 8 GiB RAM.
 - **Valkey events absent:** check `/v1/stats`; scans continue while the publisher retries its outbox.
 - **A key was lost:** create a new key; plaintext keys cannot be recovered.

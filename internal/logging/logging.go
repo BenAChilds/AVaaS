@@ -89,6 +89,7 @@ type Result struct {
 }
 
 var ErrCursorExpired = errors.New("cursor expired")
+var ErrLogUnreadable = errors.New("log source is unreadable")
 
 func Read(ctx context.Context, dir string, q Query) (Result, error) {
 	if q.Limit <= 0 {
@@ -125,9 +126,10 @@ func Read(ctx context.Context, dir string, q Query) (Result, error) {
 		paths = append(paths, jsonPaths...)
 		for _, p := range paths {
 			recs, e := readFile(ctx, p, source, q)
-			if e == nil {
-				all = append(all, recs...)
+			if e != nil {
+				return Result{}, fmt.Errorf("%w: %s", ErrLogUnreadable, source)
 			}
+			all = append(all, recs...)
 		}
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].Timestamp.Before(all[j].Timestamp) })
@@ -150,7 +152,7 @@ func readFile(ctx context.Context, path, source string, q Query) ([]Record, erro
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	s := bufio.NewScanner(f)
 	s.Buffer(make([]byte, 64*1024), 1024*1024)
 	var out []Record

@@ -8,7 +8,7 @@ services:
       - >-
         chown -R 10001:10001 /var/lib/avaas /etc/avaas-secrets &&
         chown -R 10001:10001 /var/spool/avaas /var/log/avaas &&
-        chmod 0755 /var/spool/avaas && chmod 1777 /var/log/avaas /run/avaas /var/lib/clamav-tmp &&
+        chmod 0755 /var/spool/avaas && chmod 1777 /var/log/avaas /run/clamav /var/lib/clamav-tmp &&
         test -s /etc/avaas-secrets/api-key.pepper || head -c 48 /dev/urandom | base64 > /etc/avaas-secrets/api-key.pepper &&
         test -s /etc/avaas-secrets/url-encryption.key || head -c 48 /dev/urandom | base64 > /etc/avaas-secrets/url-encryption.key &&
         chown 10001:10001 /etc/avaas-secrets/* && chmod 0400 /etc/avaas-secrets/*
@@ -16,7 +16,7 @@ services:
       - avaas_data:/var/lib/avaas
       - avaas_spool:/var/spool/avaas
       - avaas_logs:/var/log/avaas
-      - avaas_run:/run/avaas
+      - avaas_run:/run/clamav
       - avaas_secrets:/etc/avaas-secrets
       - clamav_db:/var/lib/clamav
       - clamav_tmp:/var/lib/clamav-tmp
@@ -34,7 +34,7 @@ services:
       - ./configs/freshclam.conf:/etc/clamav/freshclam.conf:ro
       - avaas_spool:/var/spool/avaas:ro
       - avaas_logs:/var/log/avaas
-      - avaas_run:/run/avaas
+      - avaas_run:/run/clamav
       - clamav_db:/var/lib/clamav
       - clamav_tmp:/var/lib/clamav-tmp
     healthcheck:
@@ -59,7 +59,7 @@ services:
         condition: service_healthy
     volumes:
       - ./configs/clamd.conf:/etc/clamav/clamd.conf:ro
-      - avaas_run:/run/avaas
+      - avaas_run:/run/clamav
     restart: "no"
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
@@ -83,6 +83,8 @@ services:
     volumes:
       - avaas_data:/var/lib/avaas
       - avaas_logs:/var/log/avaas
+      - avaas_run:/run/clamav
+      # Backward-compatible alias for existing .env files from AVaaS 1.0.
       - avaas_run:/run/avaas
       - avaas_secrets:/etc/avaas-secrets:ro
     read_only: true
@@ -115,6 +117,8 @@ services:
       - avaas_data:/var/lib/avaas
       - avaas_spool:/var/spool/avaas
       - avaas_logs:/var/log/avaas
+      - avaas_run:/run/clamav
+      # Backward-compatible alias for existing .env files from AVaaS 1.0.
       - avaas_run:/run/avaas
       - avaas_secrets:/etc/avaas-secrets:ro
     read_only: true
@@ -126,6 +130,7 @@ services:
   valkey:
     image: valkey/valkey:8-alpine
     profiles: ["valkey"]
+    user: valkey
     command: ["valkey-server", "--save", "", "--appendonly", "no"]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
