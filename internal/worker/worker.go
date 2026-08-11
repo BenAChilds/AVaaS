@@ -186,13 +186,21 @@ func (w *Worker) publishOne(ctx context.Context) {
 		return
 	}
 	if err != nil {
+		w.log.Warn("notification outbox read failed")
 		return
 	}
-	if err = w.publisher.Publish(ctx, e); err != nil {
+	publishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err = w.publisher.Publish(publishCtx, e); err != nil {
 		_ = store.EventFailed(ctx, w.store, e.EventID, err.Error())
+		w.log.Warn("Valkey event publication failed", "event_id", e.EventID, "event_type", e.EventType)
 		return
 	}
-	_ = store.EventPublished(ctx, w.store, e.EventID)
+	if err = store.EventPublished(ctx, w.store, e.EventID); err != nil {
+		w.log.Warn("notification publication acknowledgement failed", "event_id", e.EventID, "event_type", e.EventType)
+		return
+	}
+	w.log.Info("Valkey event published", "event_id", e.EventID, "event_type", e.EventType)
 }
 func sleep(ctx context.Context, d time.Duration) {
 	select {

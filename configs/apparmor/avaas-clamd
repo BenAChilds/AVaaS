@@ -1,0 +1,11 @@
+# AVaaS paths used by the distro-confined clamd binary.
+/etc/avaas/clamd.conf r,
+/var/lib/avaas/clamav/ r,
+/var/lib/avaas/clamav/** mr,
+/var/lib/avaas/clamav-tmp/ rw,
+/var/lib/avaas/clamav-tmp/** rwk,
+/var/log/avaas/clamav.log* rwk,
+/var/spool/avaas/ r,
+/var/spool/avaas/** mr,
+/run/avaas/ rw,
+/run/avaas/clamd.sock rw,

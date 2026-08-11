@@ -213,7 +213,9 @@ EOF
 docker compose --profile valkey up -d
 ```
 
-Events contain `schema_version`, `event_id`, `event_type`, `job_id`, `occurred_at`, and safe result data. Pub/Sub is not durable: a disconnected subscriber can miss an already-published event. Consumers must deduplicate possible retries using `event_id`. Valkey failure never blocks scanning.
+Events contain `schema_version`, `event_id`, `event_type`, `job_id`, `occurred_at`, and safe result data. Pub/Sub is not durable: a disconnected subscriber can miss an already-published event. Consumers must deduplicate possible retries using `event_id`. Valkey connections are established lazily and reset after publication failures; an outage never prevents the worker from starting or blocks scanning, and pending events remain in the bounded SQLite outbox for retry.
+
+AVaaS disables Valkey client-side caching and client metadata commands. A dedicated ACL user therefore does not need `CLIENT TRACKING` or other `CLIENT` permissions. Grant it authentication/connectivity, `PING`, `PUBLISH`, `SELECT` only when a nonzero database is configured, and publish access only to the configured topic. Subscribers need their own subscribe permission and channel access. Keep the password in the file named by `AVAAS_VALKEY_PASSWORD_FILE`, outside `/root` and readable by the `avaas` group; native installations commonly use `/etc/avaas/valkey.password` with ownership `root:avaas` and mode `0440`.
 
 ## Production on Linode
 
@@ -237,7 +239,7 @@ sudo ./scripts/install-rhel.sh --binary ./avaas --yes
 sudo ./scripts/install-arch.sh --binary ./avaas --yes
 ```
 
-The scripts install ClamAV/FreshClam, a locked `avaas` user, configuration, secrets, hardened `avaas-*.service` units, and `avaas.target`. Existing configuration is preserved and proposed replacements use a `.new` suffix. Use `--no-start` to stage installation. RHEL may enable EPEL after confirmation (or with `--yes`).
+The scripts install ClamAV/FreshClam, a locked `avaas` user, configuration, secrets, hardened `avaas-*.service` units, and `avaas.target`. When distro ClamAV AppArmor profiles are present, the installer adds narrowly scoped local rules for AVaaS configuration, definitions, logs, sockets, temporary extraction, and spool paths without disabling confinement. Existing configuration is preserved and proposed replacements use a `.new` suffix. Use `--no-start` to stage installation. RHEL may enable EPEL after confirmation (or with `--yes`).
 
 Native installation binds to `127.0.0.1:8080` by default. For remote production access, keep that private bind, set `AVAAS_PUBLIC_BASE_URL` to the HTTPS origin, and place Caddy or another maintained TLS reverse proxy in front of it. Never expose the native HTTP listener, clamd socket, or SQLite file directly to the Internet.
 
@@ -269,6 +271,8 @@ Run `gofmt`, `staticcheck`, `golangci-lint`, and `govulncheck` before a pull req
 ## Troubleshooting
 
 - **Startup remains unhealthy:** the first definition download is large; inspect `docker compose logs clamav`.
+- **A native installation initially has no clamd socket:** after the first definition download, clamd must load several million signatures before creating `/run/avaas/clamd.sock`. Current installers wait up to three minutes and print service diagnostics if startup actually fails.
+- **Native FreshClam says it cannot open/parse `/etc/avaas/freshclam.conf`:** compare the preserved file with `/etc/avaas/freshclam.conf.new`, then check `journalctl -k` for AppArmor denials. Current installers add the required local AppArmor rules automatically.
 - **`database is locked`:** keep the database on a local Docker volume/filesystem and do not run unsupported multi-host workers.
 - **Downloads are blocked:** the resolved address is private/reserved or a redirect entered a blocked network.
 - **An allowed development host is still blocked:** rebuild and recreate the worker, confirm the exact hostname is present in `AVAAS_DOWNLOAD_ALLOWED_PRIVATE_HOSTS`, and use a new idempotency key. A hostname resolving to loopback, metadata/link-local, or another hard-blocked range is never permitted.

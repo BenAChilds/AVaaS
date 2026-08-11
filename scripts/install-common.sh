@@ -59,6 +59,50 @@ make_secret() {
 make_secret /etc/avaas/api-key.pepper
 make_secret /etc/avaas/url-encryption.key
 
+install_apparmor_rules() {
+  profile=$1
+  rules_name=$2
+  rules_source=$3
+  profile_path="/etc/apparmor.d/$profile"
+  [ -f "$profile_path" ] || return 0
+
+  install -d -o root -g root -m 0755 /etc/apparmor.d/local
+  install -o root -g root -m 0644 "$rules_source" "/etc/apparmor.d/local/$rules_name"
+
+  local_profile="/etc/apparmor.d/local/$profile"
+  include_line="#include if exists <local/$rules_name>"
+  touch "$local_profile"
+  chmod 0644 "$local_profile"
+  if ! grep -Fqx "$include_line" "$local_profile"; then
+    printf '\n%s\n' "$include_line" >> "$local_profile"
+  fi
+
+  if command -v apparmor_parser >/dev/null 2>&1; then
+    apparmor_parser -r "$profile_path"
+  fi
+}
+
+install_apparmor_rules usr.bin.freshclam avaas-freshclam "$PROJECT_DIR/configs/apparmor/avaas-freshclam"
+install_apparmor_rules usr.sbin.clamd avaas-clamd "$PROJECT_DIR/configs/apparmor/avaas-clamd"
+
+# A manual invocation as root may have created SQLite's database or sidecar
+# files before the native installer was run. Preserve those files, but repair
+# their ownership so the unprivileged service account can migrate and open the
+# database. Refuse symlinks rather than changing an unexpected target as root.
+for database_file in \
+  /var/lib/avaas/avaas.db \
+  /var/lib/avaas/avaas.db-wal \
+  /var/lib/avaas/avaas.db-shm; do
+  if [ -L "$database_file" ]; then
+    echo "Refusing symbolic link in AVaaS database state: $database_file" >&2
+    exit 1
+  fi
+  if [ -e "$database_file" ]; then
+    chown avaas:avaas "$database_file"
+    chmod 0640 "$database_file"
+  fi
+done
+
 for unit in avaas-api.service avaas-worker.service avaas-clamd.service avaas-freshclam.service avaas.target; do
   install -o root -g root -m 0644 "$PROJECT_DIR/systemd/$unit" "/etc/systemd/system/$unit"
 done
@@ -75,7 +119,7 @@ for unit in clamav-daemon clamav-freshclam clamd@scan clamd freshclam; do
   fi
 done
 
-su -s /bin/sh avaas -c '/usr/local/bin/avaas migrate'
+su -s /bin/sh avaas -c '/usr/local/bin/avaas --config /etc/avaas/avaas.env migrate'
 if [ ! -s /var/lib/avaas/clamav/main.cvd ] && [ ! -s /var/lib/avaas/clamav/main.cld ]; then
   su -s /bin/sh avaas -c '/usr/bin/freshclam --config-file=/etc/avaas/freshclam.conf'
 fi
@@ -83,7 +127,27 @@ fi
 systemctl enable avaas.target
 if [ "$NO_START" != true ]; then
   systemctl restart avaas.target
-  sleep 2
-  /usr/local/bin/avaas doctor || true
+
+  wait_seconds=0
+  wait_limit=180
+  while [ ! -S /run/avaas/clamd.sock ] && [ "$wait_seconds" -lt "$wait_limit" ]; do
+    if systemctl is-failed --quiet avaas-clamd.service; then
+      break
+    fi
+    if [ $((wait_seconds % 10)) -eq 0 ]; then
+      echo "Waiting for clamd to load definitions and create its socket (${wait_seconds}s/${wait_limit}s) ..."
+    fi
+    sleep 2
+    wait_seconds=$((wait_seconds + 2))
+  done
+
+  if [ ! -S /run/avaas/clamd.sock ]; then
+    echo "clamd did not create /run/avaas/clamd.sock within ${wait_limit} seconds." >&2
+    systemctl --no-pager --full status avaas-clamd.service >&2 || true
+    journalctl --no-pager -n 50 -u avaas-clamd.service >&2 || true
+    exit 1
+  fi
+
+  /usr/local/bin/avaas --config /etc/avaas/avaas.env doctor
 fi
-echo "AVaaS installed. Create the first key with: sudo -u avaas /usr/local/bin/avaas keygen --description \"first administrator\""
+echo "AVaaS installed. Create the first key with: sudo -u avaas /usr/local/bin/avaas --config /etc/avaas/avaas.env keygen --description \"first administrator\""

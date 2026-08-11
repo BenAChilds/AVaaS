@@ -1,0 +1,7 @@
+# AVaaS paths used by the distro-confined freshclam binary.
+/etc/avaas/freshclam.conf r,
+/etc/avaas/clamd.conf r,
+/var/lib/avaas/clamav/ rw,
+/var/lib/avaas/clamav/** mrwk,
+/var/log/avaas/freshclam.log* rwk,
+/run/avaas/clamd.sock rw,
