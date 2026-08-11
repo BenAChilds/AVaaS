@@ -5,8 +5,8 @@ go 1.25.0
 toolchain go1.26.5
 
 require (
-	github.com/valkey-io/valkey-go v1.0.65
-	golang.org/x/sys v0.33.0
+	github.com/valkey-io/valkey-go v1.0.76
+	golang.org/x/sys v0.43.0
 	modernc.org/sqlite v1.37.1
 )
 
