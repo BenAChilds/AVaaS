@@ -245,6 +245,63 @@ Native installation binds to `127.0.0.1:8080` by default. For remote production 
 
 Check the installation with `sudo -u avaas avaas doctor`, manage it with `systemctl status avaas.target`, and uninstall without deleting data using `sudo ./scripts/uninstall.sh`. `--purge` requires an additional destructive confirmation.
 
+## Upgrading
+
+Read the release notes and `CHANGELOG.md` before upgrading. Verify the downloaded archive against the published `checksums.txt`, retain the previous release until verification succeeds, and schedule a maintenance window. Back up SQLite together with both secret files: a database backup without its matching API-key pepper and URL-encryption key is not a usable recovery set.
+
+### Docker Compose
+
+Stop the API and worker before copying SQLite so no process retains a WAL connection. ClamAV and Caddy may remain running:
+
+```sh
+install -d -m 0700 backups/pre-upgrade
+docker compose stop api worker
+docker compose cp api:/var/lib/avaas/avaas.db backups/pre-upgrade/avaas.db
+docker compose cp api:/etc/avaas-secrets/api-key.pepper backups/pre-upgrade/api-key.pepper
+docker compose cp api:/etc/avaas-secrets/url-encryption.key backups/pre-upgrade/url-encryption.key
+chmod 0600 backups/pre-upgrade/*
+```
+
+Update the checked-out release, review changes to `.env.example` and the Compose files, preserve the existing `.env`, then rebuild and recreate the stack:
+
+```sh
+git pull --ff-only
+docker compose -f compose.yaml -f compose.prod.yaml build --pull api worker init
+docker compose -f compose.yaml -f compose.prod.yaml up -d --remove-orphans
+docker compose -f compose.yaml -f compose.prod.yaml exec api avaas version
+curl --fail --silent https://scan.example.com/health/ready
+```
+
+Add `--profile valkey` to `up` when using the bundled optional Valkey service. If the upgrade fails before recreation completes, run `docker compose start api worker` to resume the old containers. After new containers have migrated SQLite, rollback requires restoring the pre-upgrade database and matching secrets as a set, then recreating containers from the previous image or source revision. Never restore a live database underneath running API or worker containers.
+
+### Native Linux
+
+Download and verify the new release archive first. Stop AVaaS, then take a root-readable backup of the binary, configuration and secrets, SQLite database, and systemd units:
+
+```sh
+upgrade_backup=/root/avaas-pre-upgrade
+install -d -m 0700 "$upgrade_backup"
+systemctl stop avaas.target
+cp -a /usr/local/bin/avaas "$upgrade_backup/"
+cp -a /etc/avaas "$upgrade_backup/"
+cp -a /var/lib/avaas/avaas.db "$upgrade_backup/"
+cp -a /etc/systemd/system/avaas-*.service /etc/systemd/system/avaas.target "$upgrade_backup/"
+```
+
+Run the installer from the newly extracted release for the host distribution. It replaces the binary and units atomically, applies migrations, preserves active configuration, and writes proposed configuration changes with a `.new` suffix:
+
+```sh
+sudo ./scripts/install-debian.sh --binary ./avaas --yes
+# Or install-rhel.sh / install-arch.sh as appropriate.
+
+diff -u /etc/avaas/avaas.env /etc/avaas/avaas.env.new || true
+sudo -u avaas /usr/local/bin/avaas --config /etc/avaas/avaas.env version
+sudo -u avaas /usr/local/bin/avaas --config /etc/avaas/avaas.env doctor
+systemctl status avaas.target --no-pager
+```
+
+Review and merge `.new` files deliberately; do not overwrite secrets or working configuration wholesale. Restart affected services after merging. For rollback, stop `avaas.target`, restore the binary, database, `/etc/avaas`, and units from the same pre-upgrade backup, run `systemctl daemon-reload`, and start the target. Restoring only the old binary after a schema migration is unsupported.
+
 ## Security model and limitations
 
 - Only HTTP(S) URLs are accepted. Userinfo is rejected.
