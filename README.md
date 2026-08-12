@@ -89,6 +89,7 @@ The canonical contract is [openapi.yaml](openapi.yaml).
 | `GET`  | `/v1/scans/{id}`    | owner/admin   | Poll a scan                     |
 | `GET`  | `/v1/queue`         | `admin`       | Queue counts                    |
 | `GET`  | `/v1/system/clamav` | authenticated | Engine/definition version       |
+| `POST` | `/v1/system/clamav/definitions/update` | `admin` | Request a definition update check |
 | `GET`  | `/v1/stats`         | `admin`       | Lifetime and 24-hour statistics |
 | `GET`  | `/v1/logs`          | authenticated | Sanitized bounded logs          |
 | `GET`  | `/health/live`      | public        | Process liveness                |
@@ -99,12 +100,15 @@ Examples:
 ```sh
 curl -H "Authorization: Bearer $AVAAS_TOKEN" http://localhost:8080/v1/queue
 curl -H "Authorization: Bearer $AVAAS_TOKEN" http://localhost:8080/v1/system/clamav
+curl -X POST -H "Authorization: Bearer $AVAAS_TOKEN" http://localhost:8080/v1/system/clamav/definitions/update
 curl -H "Authorization: Bearer $AVAAS_TOKEN" http://localhost:8080/v1/stats
 curl -G -H "Authorization: Bearer $AVAAS_TOKEN" http://localhost:8080/v1/logs \
   --data-urlencode source=clamav --data-urlencode limit=50
 ```
 
 Log queries accept `source=api|worker|clamav|freshclam|all`, `level`, RFC3339 `since`/`until`, `limit` (maximum 500), and an opaque `cursor`. Only the previous seven days are queryable. Records are normalized and aggressively sanitized; raw paths, URLs, secrets, key IDs, and authorization data are never returned. All valid, non-revoked keys may use this endpoint.
+
+Definition update requests are asynchronous and require an administrator key. A request wakes the existing FreshClam daemon; repeated requests are coalesced and limited to one wake-up every 15 minutes. Observe completion through `/v1/system/clamav` and `source=freshclam` logs. Scheduled FreshClam checks continue independently if the relay is unavailable.
 
 ## API keys
 
@@ -144,6 +148,9 @@ AVaaS reads environment variables and optionally a `KEY=VALUE` file supplied as 
 | `AVAAS_SPOOL_DIR`           | `/var/spool/avaas`              | Temporary downloads                   |
 | `AVAAS_LOG_DIR`             | `/var/log/avaas`                | Rotated API/worker/ClamAV logs        |
 | `AVAAS_CLAMD_SOCKET`        | `/run/clamav/clamd.sock`        | Docker socket; native installs use `/run/avaas/clamd.sock` |
+| `AVAAS_DEFINITION_UPDATE_TRIGGER` | `/run/avaas/definition-update.request` | Optional definition-update request marker |
+| `AVAAS_DEFINITION_UPDATE_MIN_INTERVAL` | `15m` | Minimum interval between manual wake-ups |
+| `AVAAS_FRESHCLAM_PID_FILE` | `/run/avaas/freshclam.pid` | FreshClam PID used by the relay |
 | `AVAAS_MAX_FILE_BYTES`      | `2147483648`                    | Hard download limit                   |
 | `AVAAS_QUEUE_LIMIT`         | `1000`                          | Outstanding-job ceiling               |
 | `AVAAS_WORKER_CONCURRENCY`  | `1`                             | Simultaneous downloads/scans          |
