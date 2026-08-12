@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for AVaaS definition update requests
+PartOf=avaas.target
+
+[Path]
+PathExists=/run/avaas/definition-update.request
+Unit=avaas-definition-update.service
+
+[Install]
+WantedBy=avaas.target

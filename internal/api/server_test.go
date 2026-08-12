@@ -23,6 +23,10 @@ func testServer(t *testing.T) (http.Handler, *store.Store, []byte, string, strin
 	cfg.DatabasePath = filepath.Join(dir, "avaas.db")
 	cfg.LogDir = filepath.Join(dir, "logs")
 	cfg.SpoolDir = filepath.Join(dir, "spool")
+	cfg.DefinitionUpdateTrigger = filepath.Join(dir, "run", "definition-update.request")
+	if err := os.MkdirAll(filepath.Dir(cfg.DefinitionUpdateTrigger), 0o750); err != nil {
+		t.Fatal(err)
+	}
 	cfg.PublicBaseURL = "https://scan.example"
 	s, err := store.Open(cfg.DatabasePath)
 	if err != nil {
@@ -42,6 +46,34 @@ func testServer(t *testing.T) (http.Handler, *store.Store, []byte, string, strin
 		t.Fatal(err)
 	}
 	return New(cfg, s, pepper, cipher, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))).Handler(), s, pepper, token, cfg.LogDir
+}
+
+func TestDefinitionUpdateTrigger(t *testing.T) {
+	h, s, pepper, token, _ := testServer(t)
+	unauthorized := request(t, h, http.MethodPost, "/v1/system/clamav/definitions/update", "", nil)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status %d", unauthorized.Code)
+	}
+	_, scanToken, err := store.GenerateKey(context.Background(), s, pepper, "scan only", []string{"scan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forbidden := request(t, h, http.MethodPost, "/v1/system/clamav/definitions/update", scanToken, nil)
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("forbidden status %d", forbidden.Code)
+	}
+	invalid := request(t, h, http.MethodPost, "/v1/system/clamav/definitions/update", token, []byte(`{}`))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("body status %d", invalid.Code)
+	}
+	accepted := request(t, h, http.MethodPost, "/v1/system/clamav/definitions/update", token, nil)
+	if accepted.Code != http.StatusAccepted || !bytes.Contains(accepted.Body.Bytes(), []byte(`"status":"accepted"`)) {
+		t.Fatalf("accepted: %d %s", accepted.Code, accepted.Body.String())
+	}
+	pending := request(t, h, http.MethodPost, "/v1/system/clamav/definitions/update", token, nil)
+	if pending.Code != http.StatusAccepted || !bytes.Contains(pending.Body.Bytes(), []byte(`"status":"pending"`)) {
+		t.Fatalf("pending: %d %s", pending.Code, pending.Body.String())
+	}
 }
 func request(t *testing.T, h http.Handler, method, path, token string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()

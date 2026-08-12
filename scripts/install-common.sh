@@ -103,7 +103,7 @@ for database_file in \
   fi
 done
 
-for unit in avaas-api.service avaas-worker.service avaas-clamd.service avaas-freshclam.service avaas.target; do
+for unit in avaas-api.service avaas-worker.service avaas-clamd.service avaas-freshclam.service avaas-definition-update.service avaas-definition-update.path avaas.target; do
   install -o root -g root -m 0644 "$PROJECT_DIR/systemd/$unit" "/etc/systemd/system/$unit"
 done
 systemctl daemon-reload
