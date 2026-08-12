@@ -102,6 +102,10 @@ curl -H "Authorization: Bearer $AVAAS_TOKEN" http://localhost:8080/v1/system/cla
 curl -H "Authorization: Bearer $AVAAS_TOKEN" http://localhost:8080/v1/stats
 curl -G -H "Authorization: Bearer $AVAAS_TOKEN" http://localhost:8080/v1/logs \
   --data-urlencode source=clamav --data-urlencode limit=50
+curl -G -H "Authorization: Bearer $AVAAS_TOKEN" http://localhost:8080/v1/logs \
+  --data-urlencode source=api --data-urlencode level=ERROR
+curl -G -H "Authorization: Bearer $AVAAS_TOKEN" http://localhost:8080/v1/logs \
+  --data-urlencode source=worker --data-urlencode limit=100
 ```
 
 Log queries accept `source=api|worker|clamav|freshclam|all`, `level`, RFC3339 `since`/`until`, `limit` (maximum 500), and an opaque `cursor`. Only the previous seven days are queryable. Records are normalized and aggressively sanitized; raw paths, URLs, secrets, key IDs, and authorization data are never returned. All valid, non-revoked keys may use this endpoint.
