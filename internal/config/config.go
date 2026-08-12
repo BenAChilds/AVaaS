@@ -30,6 +30,9 @@ type Config struct {
 	DownloadTimeout             time.Duration
 	DownloadAllowedPrivateHosts []string
 	DefinitionMaxAge            time.Duration
+	DefinitionUpdateTrigger     string
+	DefinitionUpdateMinInterval time.Duration
+	FreshclamPIDFile            string
 	LogMaxBytes                 int64
 	LogMaxFiles                 int
 	ValkeyEnabled               bool
@@ -53,6 +56,8 @@ func Default() Config {
 		MaxFileBytes: 2 * 1024 * 1024 * 1024, QueueLimit: 1000, WorkerConcurrency: 1,
 		MaxAttempts: 3, ResultRetention: 24 * time.Hour, LeaseDuration: 2 * time.Minute,
 		DownloadTimeout: 2 * time.Hour, DefinitionMaxAge: 24 * time.Hour,
+		DefinitionUpdateTrigger:     "/run/avaas/definition-update.request",
+		DefinitionUpdateMinInterval: 15 * time.Minute, FreshclamPIDFile: "/run/avaas/freshclam.pid",
 		LogMaxBytes: 20 * 1024 * 1024, LogMaxFiles: 5,
 		ValkeyPort: 6379, ValkeyTopic: "avaas.events", OutboxLimit: 10000,
 	}
@@ -101,6 +106,11 @@ func Load(path string) (Config, error) {
 	if c.DefinitionMaxAge, err = envDuration("AVAAS_DEFINITION_MAX_AGE", c.DefinitionMaxAge); err != nil {
 		return c, err
 	}
+	c.DefinitionUpdateTrigger = env("AVAAS_DEFINITION_UPDATE_TRIGGER", c.DefinitionUpdateTrigger)
+	if c.DefinitionUpdateMinInterval, err = envDuration("AVAAS_DEFINITION_UPDATE_MIN_INTERVAL", c.DefinitionUpdateMinInterval); err != nil {
+		return c, err
+	}
+	c.FreshclamPIDFile = env("AVAAS_FRESHCLAM_PID_FILE", c.FreshclamPIDFile)
 	if c.LogMaxBytes, err = envInt64("AVAAS_LOG_MAX_BYTES", c.LogMaxBytes); err != nil {
 		return c, err
 	}
@@ -133,7 +143,28 @@ func Load(path string) (Config, error) {
 	if c.ValkeyEnabled && (c.ValkeyHost == "" || c.ValkeyTopic == "") {
 		return c, errors.New("valkey host and topic are required when Valkey is enabled")
 	}
+	if err := validateRuntimePath("AVAAS_DEFINITION_UPDATE_TRIGGER", c.DefinitionUpdateTrigger); err != nil {
+		return c, err
+	}
+	if err := validateRuntimePath("AVAAS_FRESHCLAM_PID_FILE", c.FreshclamPIDFile); err != nil {
+		return c, err
+	}
+	if c.DefinitionUpdateMinInterval < time.Minute {
+		return c, errors.New("AVAAS_DEFINITION_UPDATE_MIN_INTERVAL must be at least 1m")
+	}
 	return c, nil
+}
+
+func validateRuntimePath(name, path string) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return fmt.Errorf("%s must be an absolute clean path", name)
+	}
+	for _, root := range []string{"/run/avaas", "/run/clamav"} {
+		if path != root && strings.HasPrefix(path, root+string(filepath.Separator)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s must be beneath /run/avaas or /run/clamav", name)
 }
 
 func loadEnvFile(path string) error {
