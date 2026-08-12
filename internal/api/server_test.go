@@ -10,13 +10,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/benachilds/avaas/internal/auth"
 	"github.com/benachilds/avaas/internal/config"
 	"github.com/benachilds/avaas/internal/store"
+	"github.com/benachilds/avaas/internal/updatecheck"
 )
 
-func testServer(t *testing.T) (http.Handler, *store.Store, []byte, string, string) {
+func testServer(t *testing.T, options ...Option) (http.Handler, *store.Store, []byte, string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -45,7 +47,7 @@ func testServer(t *testing.T) (http.Handler, *store.Store, []byte, string, strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(cfg, s, pepper, cipher, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))).Handler(), s, pepper, token, cfg.LogDir
+	return New(cfg, s, pepper, cipher, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), options...).Handler(), s, pepper, token, cfg.LogDir
 }
 
 func TestDefinitionUpdateTrigger(t *testing.T) {
@@ -87,6 +89,25 @@ func request(t *testing.T, h http.Handler, method, path, token string, body []by
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
+}
+
+type staticUpdates struct{ status updatecheck.Status }
+
+func (s staticUpdates) Snapshot() updatecheck.Status { return s.status }
+
+func TestHealthIncludesInformationalUpdateStatus(t *testing.T) {
+	checked := time.Date(2026, 8, 12, 1, 2, 3, 0, time.UTC)
+	updates := staticUpdates{status: updatecheck.Status{CurrentVersion: "v0.5.2b", Channel: "beta", Status: "available", Available: true, LatestVersion: "v0.5.3b", ReleaseURL: "https://github.com/BenAChilds/AVaaS/releases/tag/v0.5.3b", CheckedAt: &checked}}
+	h, _, _, _, _ := testServer(t, WithUpdateProvider(updates))
+	w := request(t, h, http.MethodGet, "/health/ready", "", nil)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("dependency readiness unexpectedly changed: %d", w.Code)
+	}
+	for _, expected := range []string{`"status":"available"`, `"available":true`, `"latest_version":"v0.5.3b"`} {
+		if !bytes.Contains(w.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("missing %s in %s", expected, w.Body.String())
+		}
+	}
 }
 
 func TestSubmitPollQueueAndRevoke(t *testing.T) {

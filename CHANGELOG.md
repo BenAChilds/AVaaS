@@ -4,6 +4,7 @@ All notable changes are documented here following Keep a Changelog and semantic 
 
 ## Unreleased
 
+- Report cached, channel-aware AVaaS release availability on the readiness endpoint.
 - Initial AVaaS implementation.
 - Document the proposed manual, transactional native self-updater and its verification and rollback model.
 - Document and add regression coverage for API and worker logs through the logs endpoint.
