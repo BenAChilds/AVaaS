@@ -1,0 +1,19 @@
+[Unit]
+Description=Relay an AVaaS definition update request to FreshClam
+After=avaas-freshclam.service
+Requires=avaas-freshclam.service
+PartOf=avaas.target
+
+[Service]
+Type=oneshot
+User=avaas
+Group=avaas
+EnvironmentFile=/etc/avaas/avaas.env
+ExecStart=/usr/local/bin/avaas definition-relay
+Restart=on-failure
+RestartSec=60s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/avaas

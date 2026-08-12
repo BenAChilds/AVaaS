@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/benachilds/avaas/internal/auth"
 	"github.com/benachilds/avaas/internal/clamav"
 	"github.com/benachilds/avaas/internal/config"
+	"github.com/benachilds/avaas/internal/definitions"
 	"github.com/benachilds/avaas/internal/download"
 	logstore "github.com/benachilds/avaas/internal/logging"
 	"github.com/benachilds/avaas/internal/model"
@@ -50,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/scans/{id}", s.authn(http.HandlerFunc(s.getScan)))
 	mux.Handle("GET /v1/queue", s.authn(http.HandlerFunc(s.queue)))
 	mux.Handle("GET /v1/system/clamav", s.authn(http.HandlerFunc(s.clamVersion)))
+	mux.Handle("POST /v1/system/clamav/definitions/update", s.authn(http.HandlerFunc(s.updateDefinitions)))
 	mux.Handle("GET /v1/stats", s.authn(http.HandlerFunc(s.stats)))
 	mux.Handle("GET /v1/logs", s.authn(http.HandlerFunc(s.logs)))
 	return s.security(mux)
@@ -192,6 +195,28 @@ func (s *Server) clamVersion(w http.ResponseWriter, r *http.Request) {
 	info := clamav.ParseVersion(v)
 	out := map[string]any{"raw": logstore.Sanitize(info.Raw), "ready": true, "engine_version": info.EngineVersion, "definition_version": info.DefinitionVersion, "definition_date": info.DefinitionDate}
 	writeJSON(w, 200, out)
+}
+func (s *Server) updateDefinitions(w http.ResponseWriter, r *http.Request) {
+	if !require(w, principal(r), "admin") {
+		return
+	}
+	defer func() { _ = r.Body.Close() }()
+	if body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1)); err != nil || len(body) != 0 {
+		writeError(w, 400, "invalid_request", "request body must be empty")
+		return
+	}
+	err := definitions.Trigger(s.cfg.DefinitionUpdateTrigger)
+	if errors.Is(err, definitions.ErrPending) {
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "pending"})
+		return
+	}
+	if err != nil {
+		s.log.Error("definition update trigger unavailable", "error", err)
+		writeError(w, http.StatusServiceUnavailable, "definition_update_unavailable", "definition update trigger is unavailable")
+		return
+	}
+	s.log.Info("definition update requested", "principal_id", principal(r).ID)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	if !require(w, principal(r), "admin") {

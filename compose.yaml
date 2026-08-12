@@ -127,6 +127,31 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
 
+  definition-relay:
+    build: .
+    command: ["definition-relay", "--watch"]
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    environment:
+      AVAAS_FRESHCLAM_PID_FILE: /run/clamav/freshclam.pid
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      clamav:
+        condition: service_healthy
+    pid: "service:clamav"
+    volumes:
+      - avaas_run:/run/avaas
+      - avaas_run:/run/clamav
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,size=8m"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["KILL"]
+
   valkey:
     image: valkey/valkey:8-alpine
     profiles: ["valkey"]
