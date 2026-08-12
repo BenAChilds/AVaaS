@@ -50,7 +50,7 @@ jobs:
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: 'dist/*'
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with: {files: 'dist/*', generate_release_notes: true, prerelease: true}
       - name: Normalize container image name
         id: image
