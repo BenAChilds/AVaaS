@@ -249,6 +249,8 @@ Check the installation with `sudo -u avaas avaas doctor`, manage it with `system
 
 Read the release notes and `CHANGELOG.md` before upgrading. Verify the downloaded archive against the published `checksums.txt`, retain the previous release until verification succeeds, and schedule a maintenance window. Back up SQLite together with both secret files: a database backup without its matching API-key pepper and URL-encryption key is not a usable recovery set.
 
+A security and recovery design for a future manual native updater is documented in [docs/native-self-updater.md](docs/native-self-updater.md). It is a proposal, not an enabled update mechanism; current upgrades remain operator-driven.
+
 ### Docker Compose
 
 Stop the API and worker before copying SQLite so no process retains a WAL connection. ClamAV and Caddy may remain running:
