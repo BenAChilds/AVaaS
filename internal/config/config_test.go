@@ -2,7 +2,9 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestDefaults(t *testing.T) {
@@ -10,8 +12,32 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.MaxFileBytes != 2*1024*1024*1024 || c.WorkerConcurrency != 1 || c.ValkeyEnabled || len(c.DownloadAllowedPrivateHosts) != 0 {
+	if c.MaxFileBytes != 2*1024*1024*1024 || c.WorkerConcurrency != 1 || c.ValkeyEnabled || len(c.DownloadAllowedPrivateHosts) != 0 || !c.UpdateCheckEnabled || c.UpdateCheckInterval != 6*time.Hour {
 		t.Fatalf("unexpected defaults: %#v", c)
+	}
+}
+
+func TestUpdateCheckConfiguration(t *testing.T) {
+	t.Setenv("AVAAS_UPDATE_CHECK_ENABLED", "false")
+	t.Setenv("AVAAS_UPDATE_CHECK_INTERVAL", "12h")
+	c, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.UpdateCheckEnabled || c.UpdateCheckInterval != 12*time.Hour {
+		t.Fatalf("unexpected update settings: %#v", c)
+	}
+}
+
+func TestRejectsInvalidUpdateCheckConfiguration(t *testing.T) {
+	for name, value := range map[string]string{"AVAAS_UPDATE_CHECK_ENABLED": "sometimes", "AVAAS_UPDATE_CHECK_INTERVAL": "1m"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, value)
+			_, err := Load("")
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("expected %s error, got %v", name, err)
+			}
+		})
 	}
 }
 

@@ -92,7 +92,7 @@ The canonical contract is [openapi.yaml](openapi.yaml).
 | `GET`  | `/v1/stats`         | `admin`       | Lifetime and 24-hour statistics |
 | `GET`  | `/v1/logs`          | authenticated | Sanitized bounded logs          |
 | `GET`  | `/health/live`      | public        | Process liveness                |
-| `GET`  | `/health/ready`     | public        | Dependency readiness            |
+| `GET`  | `/health/ready`     | public        | Dependency readiness and AVaaS update availability |
 
 Examples:
 
@@ -144,6 +144,8 @@ AVaaS reads environment variables and optionally a `KEY=VALUE` file supplied as 
 | `AVAAS_SPOOL_DIR`           | `/var/spool/avaas`              | Temporary downloads                   |
 | `AVAAS_LOG_DIR`             | `/var/log/avaas`                | Rotated API/worker/ClamAV logs        |
 | `AVAAS_CLAMD_SOCKET`        | `/run/clamav/clamd.sock`        | Docker socket; native installs use `/run/avaas/clamd.sock` |
+| `AVAAS_UPDATE_CHECK_ENABLED` | `true`                          | Check GitHub Releases for AVaaS updates |
+| `AVAAS_UPDATE_CHECK_INTERVAL` | `6h`                           | Release-check interval (minimum `5m`) |
 | `AVAAS_MAX_FILE_BYTES`      | `2147483648`                    | Hard download limit                   |
 | `AVAAS_QUEUE_LIMIT`         | `1000`                          | Outstanding-job ceiling               |
 | `AVAAS_WORKER_CONCURRENCY`  | `1`                             | Simultaneous downloads/scans          |
@@ -155,6 +157,8 @@ AVaaS reads environment variables and optionally a `KEY=VALUE` file supplied as 
 Concurrency multiplies spool and ClamAV load. Provision at least `concurrency × 2 GiB` of spool space plus ClamAV extraction headroom.
 
 Compose also mounts the socket at the legacy `/run/avaas/clamd.sock` path so existing `.env` files continue to work. New installations should use `/run/clamav/clamd.sock`, which matches the official ClamAV container entrypoint.
+
+The readiness response reports AVaaS release availability without changing readiness. Stable builds follow stable releases; beta builds follow newer beta or stable releases. Checks use the public `BenAChilds/AVaaS` GitHub Releases feed, run in the background, and retain the last successful result during temporary failures. Set `AVAAS_UPDATE_CHECK_ENABLED=false` to disable this optional outbound request. No new configuration is required for existing installations.
 
 ### Local Valet development
 

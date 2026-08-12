@@ -160,8 +160,12 @@ paths:
       security: []
       operationId: readiness
       responses:
-        '200': {description: Service is ready}
-        '503': {$ref: '#/components/responses/Unavailable'}
+        '200':
+          description: Service is ready
+          content: {application/json: {schema: {$ref: '#/components/schemas/Health'}}}
+        '503':
+          description: One or more operational readiness checks failed
+          content: {application/json: {schema: {$ref: '#/components/schemas/Health'}}}
 components:
   securitySchemes:
     bearerAuth:
@@ -201,6 +205,26 @@ components:
         source: {type: string, enum: [api, worker, clamav, freshclam]}
         level: {type: string}
         message: {type: string}
+    Health:
+      type: object
+      required: [ready, checks, update]
+      properties:
+        ready: {type: boolean}
+        checks:
+          type: object
+          additionalProperties: {type: boolean}
+        update: {$ref: '#/components/schemas/UpdateStatus'}
+    UpdateStatus:
+      type: object
+      required: [current_version, channel, status, available]
+      properties:
+        current_version: {type: string}
+        channel: {type: string, enum: [stable, beta, development]}
+        status: {type: string, enum: [available, current, unknown, disabled]}
+        available: {type: boolean}
+        latest_version: {type: string}
+        release_url: {type: string, format: uri}
+        checked_at: {type: string, format: date-time}
     Error:
       type: object
       required: [error]

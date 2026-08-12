@@ -24,6 +24,7 @@ import (
 	logstore "github.com/benachilds/avaas/internal/logging"
 	"github.com/benachilds/avaas/internal/notify"
 	"github.com/benachilds/avaas/internal/store"
+	"github.com/benachilds/avaas/internal/updatecheck"
 	"github.com/benachilds/avaas/internal/worker"
 )
 
@@ -133,7 +134,9 @@ func serve(ctx context.Context, c config.Config) error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Addr: c.ListenAddress, Handler: api.New(c, s, pepper, cipher, log).Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	updateChecker := updatecheck.New(c.UpdateCheckEnabled, c.UpdateCheckInterval, version, nil, log)
+	updateChecker.Start(ctx)
+	server := &http.Server{Addr: c.ListenAddress, Handler: api.New(c, s, pepper, cipher, log, api.WithUpdateProvider(updateChecker)).Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	errs := make(chan error, 1)
 	go func() {
 		log.Info("AVaaS API listening", "address", c.ListenAddress, "version", version)

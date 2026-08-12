@@ -25,6 +25,7 @@ import (
 	logstore "github.com/benachilds/avaas/internal/logging"
 	"github.com/benachilds/avaas/internal/model"
 	"github.com/benachilds/avaas/internal/store"
+	"github.com/benachilds/avaas/internal/updatecheck"
 )
 
 type principalKey struct{}
@@ -37,10 +38,21 @@ type Server struct {
 	log          *slog.Logger
 	logLimits    *limiter
 	submitLimits *limiter
+	updates      updatecheck.Provider
 }
 
-func New(cfg config.Config, s *store.Store, pepper []byte, cipher *auth.URLCipher, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, store: s, pepper: pepper, cipher: cipher, clam: clamav.Client{Socket: cfg.ClamdSocket, Timeout: 10 * time.Second}, log: log, logLimits: newLimiter(10, time.Minute), submitLimits: newLimiter(60, time.Minute)}
+type Option func(*Server)
+
+func WithUpdateProvider(provider updatecheck.Provider) Option {
+	return func(s *Server) { s.updates = provider }
+}
+
+func New(cfg config.Config, s *store.Store, pepper []byte, cipher *auth.URLCipher, log *slog.Logger, options ...Option) *Server {
+	server := &Server{cfg: cfg, store: s, pepper: pepper, cipher: cipher, clam: clamav.Client{Socket: cfg.ClamdSocket, Timeout: 10 * time.Second}, log: log, logLimits: newLimiter(10, time.Minute), submitLimits: newLimiter(60, time.Minute), updates: updatecheck.New(false, cfg.UpdateCheckInterval, "dev", nil, log)}
+	for _, option := range options {
+		option(server)
+	}
+	return server
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -283,7 +295,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		status = 503
 	}
-	writeJSON(w, status, map[string]any{"ready": ok, "checks": checks})
+	writeJSON(w, status, map[string]any{"ready": ok, "checks": checks, "update": s.updates.Snapshot()})
 }
 
 func spoolCapacity(path string, minimum int64) bool {
