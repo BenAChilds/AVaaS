@@ -21,6 +21,7 @@ import (
 	"github.com/benachilds/avaas/internal/auth"
 	"github.com/benachilds/avaas/internal/clamav"
 	"github.com/benachilds/avaas/internal/config"
+	"github.com/benachilds/avaas/internal/definitions"
 	logstore "github.com/benachilds/avaas/internal/logging"
 	"github.com/benachilds/avaas/internal/notify"
 	"github.com/benachilds/avaas/internal/store"
@@ -89,14 +90,32 @@ func run(args []string) error {
 		return work(ctx, cfg)
 	case "doctor":
 		return doctor(ctx, cfg, args[1:])
+	case "definition-relay":
+		return definitionRelay(ctx, cfg, args[1:])
 	default:
 		return usage()
 	}
 }
 func usage() error {
 	fmt.Fprintln(os.Stderr, `AVaaS (Anti-Virus as a Service)
-Usage: avaas [--config FILE] <serve|worker|migrate|keygen|keys|stats|doctor|version>`)
+Usage: avaas [--config FILE] <serve|worker|migrate|keygen|keys|stats|doctor|definition-relay|version>`)
 	return errors.New("a valid command is required")
+}
+
+func definitionRelay(ctx context.Context, c config.Config, args []string) error {
+	fs := flag.NewFlagSet("definition-relay", flag.ContinueOnError)
+	watch := fs.Bool("watch", false, "watch continuously for definition update requests")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: avaas definition-relay [--watch]")
+	}
+	relay := definitions.Relay{TriggerPath: c.DefinitionUpdateTrigger, PIDFile: c.FreshclamPIDFile, MinInterval: c.DefinitionUpdateMinInterval}
+	if *watch {
+		return relay.Watch(ctx.Done())
+	}
+	return relay.RunOnce()
 }
 func openStore(ctx context.Context, c config.Config) (*store.Store, error) {
 	s, err := store.Open(c.DatabasePath)

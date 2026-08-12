@@ -94,6 +94,24 @@ paths:
                   definition_date: {type: string}
                   ready: {type: boolean}
         '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/system/clamav/definitions/update:
+    post:
+      summary: Request an immediate ClamAV definition update check
+      operationId: updateClamAVDefinitions
+      responses:
+        '202':
+          description: Update request accepted or coalesced with a pending request
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, enum: [accepted, pending]}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/Unavailable'}
   /v1/stats:
     get:
       summary: Retrieve aggregate scan and notification statistics

@@ -4,7 +4,7 @@ set -eu
 PURGE=false
 [ "${1:-}" = --purge ] && PURGE=true
 systemctl disable --now avaas.target 2>/dev/null || true
-for unit in avaas-api.service avaas-worker.service avaas-clamd.service avaas-freshclam.service avaas.target; do
+for unit in avaas-api.service avaas-worker.service avaas-clamd.service avaas-freshclam.service avaas-definition-update.service avaas-definition-update.path avaas.target; do
   rm -f "/etc/systemd/system/$unit"
 done
 rm -f /usr/local/bin/avaas

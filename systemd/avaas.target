@@ -1,8 +1,7 @@
 [Unit]
 Description=AVaaS (Anti-Virus as a Service)
-Wants=avaas-freshclam.service avaas-clamd.service avaas-api.service avaas-worker.service
+Wants=avaas-freshclam.service avaas-clamd.service avaas-api.service avaas-worker.service avaas-definition-update.path
 After=network-online.target
 
 [Install]
 WantedBy=multi-user.target
-
